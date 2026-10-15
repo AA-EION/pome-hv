@@ -1,0 +1,46 @@
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridge.cpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridge.cpp
+@@ -146,7 +146,7 @@
+ 
+     HVDBGLOG("Got MSI address 0x%llX and data 0x%X", pciStatus.address, pciStatus.data);
+     message[0] = (UInt32) pciStatus.address;
+-    message[1] = (UInt32) (pciStatus.address << 32);
++    message[1] = (UInt32) (pciStatus.address >> 32);
+     message[2] = pciStatus.data;
+     return kIOReturnSuccess;
+   } else {
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp
+@@ -240,6 +240,9 @@
+   status = kIOReturnSuccess;
+ 
+   HVDBGLOG("Got resource requirements with status %u", pktReqResponse.status);
++  if (pktReqResponse.status != 0) {
++    return kIOReturnIOError;
++  }
+   for (int i = 0; i < kHyperVPCIBarCount; i++) {
+     UInt64 barVal = pktReqResponse.probedBARs[i];
+ 
+@@ -265,6 +268,11 @@
+     // If 64-bit the next BAR is the high 32 bits, and this one is the low 32 bits.
+     //
+     bool isBar64Bit = barVal & kHyperVPCIBarMemoryType64Bit;
++    if (isBar64Bit && i + 1 >= kHyperVPCIBarCount) {
++      HVSYSLOG("Truncated 64-bit BAR at index %u", i);
++      status = kIOReturnBadArgument;
++      break;
++    }
+     if (isBar64Bit) {
+       barVal |= ((UInt64)pktReqResponse.probedBARs[i + 1] << 32);
+     }
+@@ -329,8 +337,8 @@
+   }
+   
+   HVDBGLOG("PCI status %X", pciStatus);
+-  
+-  return status;
++
++  return pciStatus == 0 ? kIOReturnSuccess : kIOReturnIOError;
+ }
+ 
+ UInt32 HyperVPCIBridge::readPCIConfig(UInt32 offset, UInt8 size) {

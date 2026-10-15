@@ -1,0 +1,7 @@
+# pome visual system
+
+Native Windows Operate surface. Product brief pins restrained, original, Apple-inspired clarity; Windows controls and familiar navigation remain authoritative. Seven grounded references considered: museum wayfinding, book typography, editorial indices, archival collections, garden labels, architectural specification sheets, photographic contact sheets. The assigned fourth reference is archival collections: a quiet library with clear provenance and an evidence detail pane. The signature is an evidence ledger distinguishing what was detected, what is ready, and what remains unverified.
+
+Use Segoe UI Variable through the native control theme, system light/dark appearance, a muted plum accent, 32/24/16/14 type scale, generous 32px page gutters and 8px spacing rhythm. The main navigation is Library, Create, This computer, Activity. No decorative graphs, fake VM examples or invented hardware values. Empty state leads to host inspection. Creation is a readable form with native sliders, explicit media provenance and a review before elevation. GPU limitations remain in host evidence rather than interrupting the standard workflow.
+
+The user's autonomous implementation instruction supersedes additional skill approval rounds. All unsupported features are described as unavailable. Focus, high contrast, labels, scrolling and system theme inherit WinUI controls. Busy operations disable dependent actions, preserve status and surface recoverable errors.

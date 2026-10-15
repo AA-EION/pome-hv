@@ -1,0 +1,23 @@
+name: Windows build
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+      - name: Build and test without host mutations
+        shell: pwsh
+        run: ./tools/Build/Build.ps1 -Configuration Release
+      - name: Upload engineering preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: pome-windows-x64-preview
+          path: artifacts/app
+          retention-days: 7

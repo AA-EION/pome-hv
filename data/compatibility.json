@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "reviewedOn": "2026-10-15",
+  "applicationVersion": "0.1.0",
+  "host": { "architecture": "x64", "minimumWindowsBuild": 19041, "clientEditions": ["Professional", "Enterprise", "Education"] },
+  "guests": [
+    { "version": "15", "name": "Sequoia", "status": "Experimental", "pomeBootValidated": false, "minimumMemoryGiB": 8, "minimumDiskGiB": 64, "efiRelease": "OSX-Hyper-V/0.4.0" },
+    { "version": "26", "name": "Tahoe", "status": "DetectedUntested", "enabled": false, "reason": "No validated complete pome boot stack." }
+  ],
+  "graphics": {
+    "synthetic": "Experimental",
+    "gpuPartitioning": "Unsupported",
+    "clientDda": "HostOsRestricted",
+    "serverDda": "Unknown",
+    "metalValidated": false
+  },
+  "nullmoth": { "version": "2.0.2", "delivery": "ExplicitDownloadOnly", "bundled": false, "automaticInstallation": false, "license": "PolyForm-Noncommercial-1.0.0" }
+}

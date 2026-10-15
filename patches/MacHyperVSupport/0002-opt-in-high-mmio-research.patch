@@ -1,0 +1,91 @@
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridge.cpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridge.cpp
+@@ -167,11 +167,15 @@
+ 
+     result = addBridgeMemoryRange(_bars[i], _barSizes[i], true);
+     HVDBGLOG("Adding memory range 0x%llX of %llu bytes for BAR%u - %u", _bars[i], _barSizes[i], i, result);
++    if (!result) {
++      HVSYSLOG("macOS rejected BAR%u bridge aperture", i);
++      return false;
++    }
+ 
+     //
+     // Skip over next bar if 64-bit.
+     //
+-    if (_bars[i] > UINT32_MAX) {
++    if (_barIs64Bit[i]) {
+       i++;
+     }
+   }
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp
+@@ -237,6 +237,7 @@
+   //
+   memset(_bars, 0, sizeof (_bars));
+   memset(_barSizes, 0, sizeof (_barSizes));
++  memset(_barIs64Bit, 0, sizeof (_barIs64Bit));
+   status = kIOReturnSuccess;
+ 
+   HVDBGLOG("Got resource requirements with status %u", pktReqResponse.status);
+@@ -281,9 +282,29 @@
+     //
+     // Determine size of BAR and allocate it. TODO: Support 64-bit BAR allocation and fix macOS.
+     //
+-    _barSizes[i] = getBarSize(barVal);
++    _barSizes[i] = getBarSize(barVal, isBar64Bit);
+     HVDBGLOG("BAR%u requires %llu bytes", i, _barSizes[i]);
+-    _bars[i] = _hvPCIRoot->allocateRange(_barSizes[i], _barSizes[i], UINT32_MAX);
++    _barIs64Bit[i] = isBar64Bit;
++    // Research opt-in: only true 64-bit BARs may use the ACPI high aperture.
++    // The config window and all 32-bit BARs stay below 4 GiB.
++    IORangeScalar maxAddress = UINT32_MAX;
++#if defined(__x86_64__)
++    if (isBar64Bit && checkKernelArgument("-hvpcilargemmio")) {
++      maxAddress = UINT64_MAX;
++    }
++#endif
++    if (_barSizes[i] == 0 || (_barSizes[i] & (_barSizes[i] - 1)) != 0 ||
++        _barSizes[i] > maxAddress) {
++      HVSYSLOG("BAR%u size is invalid or exceeds the selected aperture", i);
++      status = kIOReturnNoResources;
++      break;
++    }
++    _bars[i] = _hvPCIRoot->allocateRange(_barSizes[i], _barSizes[i], maxAddress);
++    if (_bars[i] != 0 && (_bars[i] > maxAddress ||
++        _barSizes[i] - 1 > maxAddress - _bars[i])) {
++      _hvPCIRoot->freeRange(_bars[i], _barSizes[i]);
++      _bars[i] = 0;
++    }
+     if (_bars[i] == 0) {
+       HVSYSLOG("BAR%u could not be allocated, no more resources", i);
+       status = kIOReturnNoResources;
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridge.hpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridge.hpp
+@@ -38,6 +38,7 @@
+   IOMemoryMap         *_pciConfigMemoryMap          = nullptr;
+   UInt64              _bars[kHyperVPCIBarCount]     = { };
+   UInt64              _barSizes[kHyperVPCIBarCount] = { };
++  bool                _barIs64Bit[kHyperVPCIBarCount] = { };
+ 
+   UInt32                        _pciFunctionsCount = 0;
+   HyperVPCIFunctionDescription  *_pciFunctions     = nullptr;
+@@ -60,11 +61,15 @@
+   IOReturn queryResourceRequirements();
+   IOReturn sendResourcesAssigned(UInt32 slot);
+ 
+-  inline UInt64 getBarSize(UInt64 barValue) {
+-    if (barValue < UINT32_MAX) {
+-      barValue |= 0xFFFFFFFF00000000;
++  inline UInt64 getBarSize(UInt64 barValue, bool is64Bit) {
++    if (!is64Bit) {
++      barValue |= 0xFFFFFFFF00000000ULL;
+     }
+-    return roundup((1 + ~(barValue & kHyperVPCIBarMemoryMask)), PAGE_SIZE);
++    UInt64 size = 1 + ~(barValue & ~0x0FULL);
++    if (size == 0 || (size & (size - 1)) != 0) {
++      return 0;
++    }
++    return size < PAGE_SIZE ? PAGE_SIZE : size;
+   }
+ 
+   //

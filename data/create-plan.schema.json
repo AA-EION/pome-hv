@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pome creation plan version 1",
+  "type": "object",
+  "required": ["schemaVersion", "operationId", "name", "storageRoot", "cpuCount", "memoryGiB", "diskGiB", "efiSource", "efiSha256", "macOsVersion", "acceptLicense", "acceptGuestFirmwareChange"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "operationId": { "type": "string", "format": "uuid" },
+    "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$" },
+    "storageRoot": { "type": "string", "minLength": 3 },
+    "cpuCount": { "type": "integer", "minimum": 2, "maximum": 64 },
+    "memoryGiB": { "type": "integer", "minimum": 8, "maximum": 128 },
+    "diskGiB": { "type": "integer", "minimum": 64, "maximum": 2048 },
+    "efiSource": { "type": "string" },
+    "efiSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "macOsVersion": { "const": "15" },
+    "acceptLicense": { "const": true },
+    "acceptGuestFirmwareChange": { "const": true },
+    "buildEfiFromArchive": { "type": "boolean" },
+    "cpuProfile": { "enum": ["NativeIntel", "CometLakeEmulation"] }
+  },
+  "$comment": "Descriptive schema only; runtime PlanValidator also checks host resources, media digests and optional recovery fields. No arbitrary profile import execution is provided."
+}

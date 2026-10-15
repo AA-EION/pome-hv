@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+.vs/
+.research/
+.tools/
+artifacts/
+*.user
+*.db*
+.impeccable/

@@ -1,0 +1,74 @@
+<Window x:Class="Pome.UI.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:Pome.UI" xmlns:core="using:Pome.Core" Title="pome">
+  <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <NavigationView x:Name="Navigation" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" PaneDisplayMode="Left" OpenPaneLength="220" SelectionChanged="Navigate">
+      <NavigationView.PaneHeader><StackPanel Margin="20,24,0,24" Spacing="4"><TextBlock Text="pome" FontSize="30" FontWeight="SemiBold"/><TextBlock Text="A place for your virtual Mac." FontSize="12" TextWrapping="Wrap"/></StackPanel></NavigationView.PaneHeader>
+      <NavigationView.MenuItems>
+        <NavigationViewItem Content="Library" Tag="Library" Icon="Library" IsSelected="True"/>
+        <NavigationViewItem Content="Create a virtual machine" Tag="Create" Icon="Add"/>
+        <NavigationViewItem Content="This computer" Tag="Computer"><NavigationViewItem.Icon><FontIcon Glyph="&#xE770;"/></NavigationViewItem.Icon></NavigationViewItem>
+        <NavigationViewItem Content="Activity" Tag="Activity"><NavigationViewItem.Icon><FontIcon Glyph="&#xE823;"/></NavigationViewItem.Icon></NavigationViewItem>
+      </NavigationView.MenuItems>
+      <NavigationView.PaneFooter><TextBlock Text="Engineering preview · 0.1" Margin="20,12" FontSize="12" TextWrapping="Wrap"/></NavigationView.PaneFooter>
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+        <Grid Padding="32,28,32,40" MaxWidth="1040" HorizontalAlignment="Stretch">
+          <StackPanel x:Name="LibraryPanel" Spacing="24">
+            <Grid><TextBlock Text="Your library" Style="{ThemeResource TitleTextBlockStyle}"/><Button Content="Refresh" HorizontalAlignment="Right" Click="Refresh" IsEnabled="{Binding Idle}"/></Grid>
+            <TextBlock Text="A little room for another world." FontSize="20"/>
+            <TextBlock Text="Inspect this computer, then create a virtual machine with a prepared Hyper-V boot disk. Existing machines appear below when Hyper-V is available." TextWrapping="Wrap" MaxWidth="650" HorizontalAlignment="Left"/>
+            <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Inspect this computer" Click="Inspect" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}"/><Button Content="Create a virtual machine" Click="GoCreate"/></StackPanel>
+            <ListView x:Name="VmList" ItemsSource="{Binding VirtualMachines}" SelectionMode="Single" MinHeight="100" AutomationProperties.Name="Virtual machines">
+              <ListView.ItemTemplate><DataTemplate x:DataType="core:VmInfo"><Grid Padding="8,12" MinWidth="300"><StackPanel Spacing="6"><TextBlock Text="{x:Bind Name}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="{x:Bind Summary}" TextWrapping="Wrap"/></StackPanel></Grid></DataTemplate></ListView.ItemTemplate>
+            </ListView>
+            <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Start" Click="StartVm" IsEnabled="{Binding Idle}"/><Button Content="Open console" Click="OpenConsole"/><Button Content="Shut down" Click="ShutdownVm" IsEnabled="{Binding Idle}"/></StackPanel>
+            <InfoBar IsOpen="True" IsClosable="False" Severity="Informational" Title="A clear starting point" Message="This preview has not yet validated a macOS boot. Existing VMs from other tools are shown read-only. GPU assignment is unavailable."/>
+          </StackPanel>
+          <StackPanel x:Name="CreatePanel" Visibility="Collapsed" Spacing="24" MaxWidth="720" HorizontalAlignment="Left">
+            <TextBlock Text="Make room for macOS" Style="{ThemeResource TitleTextBlockStyle}"/>
+            <TextBlock Text="Sequoia · experimental Hyper-V profile" FontSize="18"/>
+            <TextBlock Text="{Binding Advice}" TextWrapping="Wrap"/>
+            <TextBox Header="Name" Text="{Binding VmName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/>
+            <TextBox Header="Storage folder" Text="{Binding StorageRoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="An existing folder on a local drive"/>
+            <Grid ColumnSpacing="24"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+              <StackPanel><TextBlock Text="Virtual processors"/><Slider Minimum="2" Maximum="32" StepFrequency="1" Value="{Binding CpuCount, Mode=TwoWay}" AutomationProperties.Name="Virtual processors"/><TextBlock Text="{Binding CpuCount}"/></StackPanel>
+              <StackPanel Grid.Column="1"><TextBlock Text="Memory (GB)"/><Slider Minimum="8" Maximum="64" StepFrequency="1" Value="{Binding MemoryGiB, Mode=TwoWay}" AutomationProperties.Name="Memory in gigabytes"/><TextBlock Text="{Binding MemoryGiB}"/></StackPanel>
+            </Grid>
+            <NumberBox Header="Disk capacity (GB)" Minimum="64" Maximum="2048" Value="{Binding DiskGiB, Mode=TwoWay}" SpinButtonPlacementMode="Inline"/>
+            <ComboBox Header="Network" ItemsSource="{Binding Switches}" SelectedItem="{Binding SelectedSwitch, Mode=TwoWay}" HorizontalAlignment="Stretch"/>
+            <TextBlock Text="Boot media" FontSize="22" FontWeight="SemiBold"/>
+            <CheckBox Content="Prepare EFI and download recovery from Apple" IsChecked="{Binding AutomaticMedia, Mode=TwoWay}"/>
+            <TextBlock Text="Automatic preparation supports the reviewed Intel CPU matrix and uses OSX-Hyper-V 0.4.0. The pinned template sets guest SIP to 0x03 (allows unsigned kexts and unrestricted filesystem access). It requires an installed Python 3. Recovery selection follows Apple's response for the Sequoia board profile; verify the offered version in the installer." TextWrapping="Wrap"/>
+            <TextBox Header="Installed Python 3 executable (automatic mode)" PlaceholderText="C:\Python314\python.exe" Text="{Binding PythonPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="Use a prepared OSX-Hyper-V EFI VHDX with a unique machine identity and the right CPU profile. Verify its SHA-256 against your trusted build record. Recovery can be on that EFI disk or a separate VHDX." TextWrapping="Wrap"/>
+            <TextBox Header="EFI VHDX path" Text="{Binding EfiSource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBox Header="EFI SHA-256" Text="{Binding EfiHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/>
+            <Expander Header="Separate recovery disk (optional)" HorizontalAlignment="Stretch"><StackPanel Spacing="16"><TextBox Header="Recovery VHDX path" Text="{Binding RecoverySource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/><TextBox Header="Recovery SHA-256" Text="{Binding RecoveryHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/></StackPanel></Expander>
+            <CheckBox IsChecked="{Binding AcceptLicense, Mode=TwoWay}"><TextBlock Text="I reviewed the applicable macOS license and have permission for this use. Apple limits macOS virtualization to qualifying Apple-branded hardware." TextWrapping="Wrap"/></CheckBox>
+            <HyperlinkButton Content="Read Apple's software licenses" NavigateUri="https://www.apple.com/legal/sla/"/>
+            <CheckBox IsChecked="{Binding AcceptFirmware, Mode=TwoWay}"><TextBlock Text="Allow Secure Boot to be turned off for this new guest. Prepared OpenCore media may also change guest SIP settings; I have reviewed that media's configuration." TextWrapping="Wrap"/></CheckBox>
+            <Button Content="Review and create" Style="{StaticResource AccentButtonStyle}" Click="CreateVm" IsEnabled="{Binding Idle}"/>
+          </StackPanel>
+          <StackPanel x:Name="ComputerPanel" Visibility="Collapsed" Spacing="24">
+            <TextBlock Text="{Binding HostTitle}" Style="{ThemeResource TitleTextBlockStyle}" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding HostSummary}" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Refresh assessment" Click="Refresh" IsEnabled="{Binding Idle}"/><Button Content="Enable Hyper-V…" Click="EnableHyperV" IsEnabled="{Binding Idle}"/></StackPanel>
+            <ItemsControl ItemsSource="{Binding Capabilities}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:CapabilityRow"><Grid Padding="0,14" ColumnSpacing="20"><Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Spacing="5"><TextBlock Text="{x:Bind Name}" FontWeight="SemiBold"/><TextBlock Text="{x:Bind State}" FontSize="12"/></StackPanel><TextBlock Grid.Column="1" Text="{x:Bind Detail}" TextWrapping="Wrap"/></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+            <TextBlock Text="Graphics hardware" FontSize="22" FontWeight="SemiBold"/>
+            <ItemsControl ItemsSource="{Binding Gpus}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,16"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+            <InfoBar IsOpen="True" IsClosable="False" Severity="Informational" Title="Your display stays with Windows" Message="MUX state, display ownership, IOMMU isolation and BAR sizes are unknown unless independently measured. Pome does not detach GPUs."/>
+            <TextBlock Text="NullMoth driver" FontSize="22" FontWeight="SemiBold"/>
+            <TextBlock Text="Available separately from its author under PolyForm Noncommercial 1.0.0. Downloading does not establish compatibility or grant commercial-use rights. Pome does not install or run this driver." TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Spacing="12"><HyperlinkButton Content="License and source" NavigateUri="https://github.com/nullmoth/nvidia-macos-driver/blob/v2.0.2/LICENSE"/><Button Content="Download upstream release…" Click="DownloadNullMoth" IsEnabled="{Binding Idle}"/></StackPanel>
+          </StackPanel>
+          <StackPanel x:Name="ActivityPanel" Visibility="Collapsed" Spacing="24">
+            <TextBlock Text="Activity &amp; recovery" Style="{ThemeResource TitleTextBlockStyle}"/>
+            <TextBlock Text="Incomplete operations remain visible after restart. Inspect the operation.json file in the VM's storage directory before retrying. Recovery never deletes a virtual disk automatically." TextWrapping="Wrap"/>
+            <ItemsControl ItemsSource="{Binding Activity}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="core:JournalEntry"><StackPanel Spacing="6" Margin="0,0,0,24"><TextBlock Text="{x:Bind Kind}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="{x:Bind Stage}"/><TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap"/><TextBlock Text="{x:Bind Id}" FontSize="12"/></StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+            <Button Content="Export diagnostics" Click="ExportDiagnostics" IsEnabled="{Binding Idle}"/>
+          </StackPanel>
+        </Grid>
+      </ScrollViewer>
+    </NavigationView>
+    <StackPanel Grid.Row="1" Spacing="8" Padding="20,12"><ProgressBar IsIndeterminate="{Binding Busy}" Height="2"/><TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite"/></StackPanel>
+  </Grid>
+</Window>

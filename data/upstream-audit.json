@@ -1,0 +1,90 @@
+[
+  {
+    "name": "1401",
+    "commit": "381eec6b632547419c6e80eac7352a6760f02332",
+    "licenseFile": "LICENSE",
+    "licenseSha256": "016AAB412BEEE0F18E682BBB62F2A474FFB60144BF73A0F80497B856ED62FE7D",
+    "branch": "main",
+    "date": "2026-10-13T14:22:17-07:00"
+  },
+  {
+    "name": "Lilu",
+    "commit": "0515f40b7f2a096adc85e832a4c6104fbd07f936",
+    "licenseFile": "LICENSE.txt",
+    "licenseSha256": "7B0AAEB96980F79175CD15D51AFBBFC4CB1D83C0C0230E6A7D4DC6DA14F761C9",
+    "branch": "master",
+    "date": "2026-03-20T18:10:47+03:00"
+  },
+  {
+    "name": "MacHyperVSupport",
+    "commit": "cafcd34daea5e58633112a1e63cef1f07bbc8404",
+    "licenseFile": "LICENSE.txt",
+    "licenseSha256": "88AFFFD254E1F3587F194CB2C87E8E5D848E32A81FE9CFB39198F9D86DC49273",
+    "branch": "master",
+    "date": "2026-09-27T22:19:01Z"
+  },
+  {
+    "name": "nvidia-macos-driver",
+    "commit": "d96eaca3f47e748ce5b1f5fa3913a85e48f1f5fb",
+    "licenseFile": "LICENSE",
+    "licenseSha256": "016AAB412BEEE0F18E682BBB62F2A474FFB60144BF73A0F80497B856ED62FE7D",
+    "branch": "main",
+    "date": "2026-10-15T06:43:13-07:00"
+  },
+  {
+    "name": "OpCore-Simplify",
+    "commit": "50de6e73ac90043dfac6bc938c441b34db5f0803",
+    "licenseFile": "LICENSE",
+    "licenseSha256": "05EFC0CCFB1E91FF93D8EEB3E347D36DD22AEEFC514272DAC7A333DD85773A71",
+    "branch": "main",
+    "date": "2026-10-04T17:27:26+07:00"
+  },
+  {
+    "name": "open-gpu-kernel-modules",
+    "commit": "ca2d03e6fafd4d4b56b383497d931c25b283bfcf",
+    "licenseFile": "COPYING",
+    "licenseSha256": "6C2815B88488668C9E8AF5AD9E0157973CE789D95C06586EDC51FA2CE5C02AC4",
+    "branch": "main",
+    "date": "2026-10-07T09:29:01-07:00"
+  },
+  {
+    "name": "OpenCorePkg",
+    "commit": "81ecf1a7e75c318dfc859ddabe5b91f4af757231",
+    "licenseFile": "LICENSE.txt",
+    "licenseSha256": "0F862188FA1DCBF308D3398420C3E52766E6F542CEC2933AD63D206BFF595A8A",
+    "branch": "master",
+    "date": "2026-10-11T00:00:31+03:00"
+  },
+  {
+    "name": "OSX-Hyper-V",
+    "commit": "05a6922e2c7cafe96c208babd527df1a57e61fac",
+    "licenseFile": "LICENSE",
+    "licenseSha256": "49D064AD2A7B0F1367D275E889172D4B329E1ED3DE6365CEDDA2274EE598833F",
+    "branch": "main",
+    "date": "2026-02-25T09:56:39-06:00"
+  },
+  {
+    "name": "Virtualization-Documentation",
+    "commit": "7db63dd96652aa4b4cb57685a967eed83395aa89",
+    "licenseFile": "LICENSE",
+    "licenseSha256": "D6239AFA918961B465B07BF7411CBE34FF6685854F58553DB7966F4881A0211F",
+    "branch": "main",
+    "date": "2026-10-07T23:01:36Z"
+  },
+  {
+    "name": "VirtualSMC",
+    "commit": "b5c62c2311540c529c00996d0d9cec33f8e571c9",
+    "licenseFile": "LICENSE.txt",
+    "licenseSha256": "2D10D0172618B2C8AD544E7799FFFE1C596FD7297B949FF69BC48C4F139C5209",
+    "branch": "master",
+    "date": "2026-09-27T22:18:59Z"
+  },
+  {
+    "name": "WhateverGreen",
+    "commit": "093e76fec5655001f38b367dd22459c756ee89fa",
+    "licenseFile": "LICENSE.txt",
+    "licenseSha256": "49D7A97C153740F27B5C235B2F51889D38A46B671370628578128B19C033875C",
+    "branch": "master",
+    "date": "2026-09-27T22:18:57Z"
+  }
+]
