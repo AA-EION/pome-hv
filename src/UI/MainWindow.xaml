@@ -31,18 +31,22 @@
             <TextBox Header="Storage folder" Text="{Binding StorageRoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="An existing folder on a local drive"/>
             <Grid ColumnSpacing="24"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
               <StackPanel><TextBlock Text="Virtual processors"/><Slider Minimum="2" Maximum="32" StepFrequency="1" Value="{Binding CpuCount, Mode=TwoWay}" AutomationProperties.Name="Virtual processors"/><TextBlock Text="{Binding CpuCount}"/></StackPanel>
-              <StackPanel Grid.Column="1"><TextBlock Text="Memory (GB)"/><Slider Minimum="8" Maximum="64" StepFrequency="1" Value="{Binding MemoryGiB, Mode=TwoWay}" AutomationProperties.Name="Memory in gigabytes"/><TextBlock Text="{Binding MemoryGiB}"/></StackPanel>
+              <StackPanel Grid.Column="1"><TextBlock Text="Memory (GB)"/><Slider Minimum="4" Maximum="64" StepFrequency="1" Value="{Binding MemoryGiB, Mode=TwoWay}" AutomationProperties.Name="Memory in gigabytes"/><TextBlock Text="{Binding MemoryGiB}"/></StackPanel>
             </Grid>
             <NumberBox Header="Disk capacity (GB)" Minimum="64" Maximum="2048" Value="{Binding DiskGiB, Mode=TwoWay}" SpinButtonPlacementMode="Inline"/>
             <ComboBox Header="Network" ItemsSource="{Binding Switches}" SelectedItem="{Binding SelectedSwitch, Mode=TwoWay}" HorizontalAlignment="Stretch"/>
             <TextBlock Text="Boot media" FontSize="22" FontWeight="SemiBold"/>
             <CheckBox Content="Prepare EFI and download recovery from Apple" IsChecked="{Binding AutomaticMedia, Mode=TwoWay}"/>
-            <TextBlock Text="Automatic preparation supports the reviewed Intel CPU matrix and uses OSX-Hyper-V 0.4.0. The pinned template sets guest SIP to 0x03 (allows unsigned kexts and unrestricted filesystem access). It requires an installed Python 3. Recovery selection follows Apple's response for the Sequoia board profile; verify the offered version in the installer." TextWrapping="Wrap"/>
-            <TextBox Header="Installed Python 3 executable (automatic mode)" PlaceholderText="C:\Python314\python.exe" Text="{Binding PythonPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-            <TextBlock Text="Use a prepared OSX-Hyper-V EFI VHDX with a unique machine identity and the right CPU profile. Verify its SHA-256 against your trusted build record. Recovery can be on that EFI disk or a separate VHDX." TextWrapping="Wrap"/>
-            <TextBox Header="EFI VHDX path" Text="{Binding EfiSource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-            <TextBox Header="EFI SHA-256" Text="{Binding EfiHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/>
-            <Expander Header="Separate recovery disk (optional)" HorizontalAlignment="Stretch"><StackPanel Spacing="16"><TextBox Header="Recovery VHDX path" Text="{Binding RecoverySource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/><TextBox Header="Recovery SHA-256" Text="{Binding RecoveryHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/></StackPanel></Expander>
+            <StackPanel Visibility="{Binding AutomaticMediaVisibility}" Spacing="16">
+              <TextBlock Text="Automatic preparation supports the reviewed Intel CPU matrix and uses OSX-Hyper-V 0.4.0 with Pome's built-in isolated Python virtual environment. The pinned template sets guest SIP to 0x03 (allows unsigned kexts and unrestricted filesystem access). Completed recovery downloads are verified again against Apple's signed chunklist before reuse." TextWrapping="Wrap"/>
+            </StackPanel>
+            <StackPanel Visibility="{Binding ManualMediaVisibility}" Spacing="16">
+              <TextBlock Text="Use a prepared OSX-Hyper-V EFI VHDX with a unique machine identity and the right CPU profile. Verify its SHA-256 against your trusted build record. Recovery can be on that EFI disk or a separate VHDX." TextWrapping="Wrap"/>
+              <TextBox Header="EFI VHDX path" Text="{Binding EfiSource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+              <TextBox Header="EFI SHA-256" Text="{Binding EfiHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/>
+              <Expander Header="Separate recovery disk (optional)" HorizontalAlignment="Stretch"><StackPanel Spacing="16"><TextBox Header="Recovery VHDX path" Text="{Binding RecoverySource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/><TextBox Header="Recovery SHA-256" Text="{Binding RecoveryHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/></StackPanel></Expander>
+            </StackPanel>
+            <InfoBar IsOpen="True" IsClosable="False" Severity="Informational" Title="After creating the virtual machine" Message="Start the VM from Library and choose Open console. In OpenCore, pick the macOS Base System / Recovery entry. Open Disk Utility, erase the new virtual disk as APFS (GUID Partition Map), close Disk Utility, and run Reinstall macOS."/>
             <CheckBox IsChecked="{Binding AcceptLicense, Mode=TwoWay}"><TextBlock Text="I reviewed the applicable macOS license and have permission for this use. Apple limits macOS virtualization to qualifying Apple-branded hardware." TextWrapping="Wrap"/></CheckBox>
             <HyperlinkButton Content="Read Apple's software licenses" NavigateUri="https://www.apple.com/legal/sla/"/>
             <CheckBox IsChecked="{Binding AcceptFirmware, Mode=TwoWay}"><TextBlock Text="Allow Secure Boot to be turned off for this new guest. Prepared OpenCore media may also change guest SIP settings; I have reviewed that media's configuration." TextWrapping="Wrap"/></CheckBox>
@@ -51,7 +55,7 @@
           <StackPanel x:Name="ComputerPanel" Visibility="Collapsed" Spacing="24">
             <TextBlock Text="{Binding HostTitle}" Style="{ThemeResource TitleTextBlockStyle}" TextWrapping="Wrap"/>
             <TextBlock Text="{Binding HostSummary}" TextWrapping="Wrap"/>
-            <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Refresh assessment" Click="Refresh" IsEnabled="{Binding Idle}"/><Button Content="Enable Hyper-V…" Click="EnableHyperV" IsEnabled="{Binding Idle}"/></StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Refresh assessment" Click="Refresh" IsEnabled="{Binding Idle}"/><Button Content="Inspect with administrator access" Click="InspectAsAdministrator" IsEnabled="{Binding Idle}"/><Button Content="Enable Hyper-V…" Click="EnableHyperV" IsEnabled="{Binding CanEnableHyperV}"/></StackPanel>
             <ItemsControl ItemsSource="{Binding Capabilities}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:CapabilityRow"><Grid Padding="0,14" ColumnSpacing="20"><Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Spacing="5"><TextBlock Text="{x:Bind Name}" FontWeight="SemiBold"/><TextBlock Text="{x:Bind State}" FontSize="12"/></StackPanel><TextBlock Grid.Column="1" Text="{x:Bind Detail}" TextWrapping="Wrap"/></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
             <TextBlock Text="Graphics hardware" FontSize="22" FontWeight="SemiBold"/>
             <ItemsControl ItemsSource="{Binding Gpus}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,16"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
@@ -63,12 +67,12 @@
           <StackPanel x:Name="ActivityPanel" Visibility="Collapsed" Spacing="24">
             <TextBlock Text="Activity &amp; recovery" Style="{ThemeResource TitleTextBlockStyle}"/>
             <TextBlock Text="Incomplete operations remain visible after restart. Inspect the operation.json file in the VM's storage directory before retrying. Recovery never deletes a virtual disk automatically." TextWrapping="Wrap"/>
-            <ItemsControl ItemsSource="{Binding Activity}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="core:JournalEntry"><StackPanel Spacing="6" Margin="0,0,0,24"><TextBlock Text="{x:Bind Kind}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="{x:Bind Stage}"/><TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap"/><TextBlock Text="{x:Bind Id}" FontSize="12"/></StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+            <ItemsControl ItemsSource="{Binding Activity}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="core:JournalEntry"><StackPanel Spacing="6" Margin="0,0,0,24"><TextBlock Text="{x:Bind Kind}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="{x:Bind Stage}"/><TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap"/><TextBlock Text="{x:Bind ResourceDirectory}" FontSize="12" TextWrapping="Wrap"/><TextBlock Text="{x:Bind Id}" FontSize="12"/></StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
             <Button Content="Export diagnostics" Click="ExportDiagnostics" IsEnabled="{Binding Idle}"/>
           </StackPanel>
         </Grid>
       </ScrollViewer>
     </NavigationView>
-    <StackPanel Grid.Row="1" Spacing="8" Padding="20,12"><ProgressBar IsIndeterminate="{Binding Busy}" Height="2"/><TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite"/></StackPanel>
+    <StackPanel Grid.Row="1" Spacing="8" Padding="20,12"><Button Content="Cancel preparation" Click="CancelPreparation" IsEnabled="{Binding CanCancel}"/><ProgressBar IsIndeterminate="{Binding Busy}" Height="2"/><TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite"/></StackPanel>
   </Grid>
 </Window>

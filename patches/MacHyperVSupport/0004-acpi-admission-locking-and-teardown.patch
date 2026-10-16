@@ -1,0 +1,198 @@
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridge.cpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridge.cpp
+@@ -101,6 +101,43 @@
+     stop(provider);
+   }
+   return result;
++}
++
++void HyperVPCIBridge::stop(IOService *provider) {
++  HVDBGLOG("Stopping Hyper-V PCI Bridge");
++  if (_pciConfigMemoryMap != nullptr && _hvPCIRoot != nullptr) {
++    UInt16 cmd = (UInt16)readPCIConfig(kIOPCIConfigCommand, sizeof (UInt16));
++    if (cmd & 0x0006) {
++      writePCIConfig(kIOPCIConfigCommand, sizeof (UInt16), cmd & ~0x0006U);
++    }
++  }
++  if (_hvPCIRoot != nullptr) {
++    for (int i = 0; i < kHyperVPCIBarCount; i++) {
++      if (_bars[i] != 0) {
++        _hvPCIRoot->freeRange(_bars[i], _barSizes[i]);
++        _bars[i] = 0;
++        _barSizes[i] = 0;
++        _barIs64Bit[i] = false;
++      }
++    }
++  }
++  OSSafeReleaseNULL(_pciConfigMemoryMap);
++  OSSafeReleaseNULL(_pciConfigMemoryDescriptor);
++  if (_pciConfigSpace != 0 && _hvPCIRoot != nullptr) {
++    _hvPCIRoot->freeRange(_pciConfigSpace, kHyperVPCIBridgeWindowSize);
++    _pciConfigSpace = 0;
++  }
++  if (_pciFunctions != nullptr) {
++    IOFree(_pciFunctions, _pciFunctionsCount * sizeof (HyperVPCIFunctionDescription));
++    _pciFunctions = nullptr;
++    _pciFunctionsCount = 0;
++  }
++  if (_pciLock != nullptr) {
++    IOSimpleLockFree(_pciLock);
++    _pciLock = nullptr;
++  }
++  OSSafeReleaseNULL(_hvDevice);
++  super::stop(provider);
+ }
+ 
+ IOReturn HyperVPCIBridge::callPlatformFunction(const OSSymbol *functionName, bool waitForFunction, void *param1, void *param2, void *param3, void *param4) {
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp
+@@ -346,11 +346,40 @@
+     if (_bars[i] == 0) {
+       continue;
+     }
+-    writePCIConfig(kIOPCIConfigBaseAddress0 + (i * sizeof (UInt32)), sizeof (UInt32), (UInt32)_bars[i]);
++    UInt32 lowFlags = pktReqResponse.probedBARs[i] & 0x0FU;
++    UInt32 expectedLow = ((UInt32)_bars[i] & ~0x0FU) | lowFlags;
++    writePCIConfig(kIOPCIConfigBaseAddress0 + (i * sizeof (UInt32)), sizeof (UInt32), expectedLow);
++    UInt32 actualLow = readPCIConfig(kIOPCIConfigBaseAddress0 + (i * sizeof (UInt32)), sizeof (UInt32));
++    if ((actualLow & ~0x0FU) != (expectedLow & ~0x0FU) || (actualLow & 0x07U) != (lowFlags & 0x07U)) {
++      status = kIOReturnIOError;
++      break;
++    }
+     if (_barIs64Bit[i]) {
+-      writePCIConfig(kIOPCIConfigBaseAddress0 + ((i + 1) * sizeof (UInt32)), sizeof (UInt32), (UInt32)(_bars[i] >> 32));
++      UInt32 expectedHigh = (UInt32)(_bars[i] >> 32);
++      writePCIConfig(kIOPCIConfigBaseAddress0 + ((i + 1) * sizeof (UInt32)), sizeof (UInt32), expectedHigh);
++      UInt32 actualHigh = readPCIConfig(kIOPCIConfigBaseAddress0 + ((i + 1) * sizeof (UInt32)), sizeof (UInt32));
++      if (actualHigh != expectedHigh) {
++        status = kIOReturnIOError;
++        break;
++      }
+       i++;
+     }
++  }
++
++  if (status != kIOReturnSuccess) {
++    for (int i = 0; i < kHyperVPCIBarCount; i++) {
++      if (_bars[i] != 0) {
++        writePCIConfig(kIOPCIConfigBaseAddress0 + (i * sizeof (UInt32)), sizeof (UInt32), 0);
++        if (_barIs64Bit[i]) {
++          writePCIConfig(kIOPCIConfigBaseAddress0 + ((i + 1) * sizeof (UInt32)), sizeof (UInt32), 0);
++        }
++        _hvPCIRoot->freeRange(_bars[i], _barSizes[i]);
++      }
++    }
++    memset(_bars, 0, sizeof (_bars));
++    memset(_barSizes, 0, sizeof (_barSizes));
++    memset(_barIs64Bit, 0, sizeof (_barIs64Bit));
++    return status;
+   }
+ 
+   //
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridge.hpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridge.hpp
+@@ -88,6 +88,7 @@
+   // IOService overrides.
+   //
+   bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++  void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
+   IOReturn callPlatformFunction(const OSSymbol *functionName, bool waitForFunction,
+                                 void *param1, void *param2, void *param3, void *param4) APPLE_KEXT_OVERRIDE;
+ 
+--- a/MacHyperVSupport/PCIRoot/HyperVPCIRoot.cpp
++++ b/MacHyperVSupport/PCIRoot/HyperVPCIRoot.cpp
+@@ -106,14 +106,47 @@
+         }
+ 
+         //
+-        // Add to appropriate range allocator.
++        // Validate ACPI aperture bounds, overflow, 4 GiB boundary crossing and overlaps
++        // before admitting the range into the low or high allocator.
+         //
+-        if (acpiRanges[i].minAddressRange > UINT32_MAX) {
+-          _rangeAllocatorHigh->deallocate(static_cast<IOPhysicalAddress>(acpiRanges[i].minAddressRange),
+-                                          static_cast<IOPhysicalLength>(acpiRanges[i].addressLength));
++        UInt64 minAddr = acpiRanges[i].minAddressRange;
++        UInt64 lenAddr = acpiRanges[i].addressLength;
++        if (minAddr == 0 || lenAddr == 0 || lenAddr - 1 > UINT64_MAX - minAddr) {
++          HVSYSLOG("Skipping malformed ACPI memory range %d", i);
++          continue;
++        }
++        UInt64 endAddr = minAddr + (lenAddr - 1);
++        if (acpiRanges[i].maxAddressRange != 0 && acpiRanges[i].maxAddressRange < endAddr) {
++          HVSYSLOG("Skipping inconsistent ACPI memory range %d", i);
++          continue;
++        }
++        if (minAddr <= UINT32_MAX && endAddr > UINT32_MAX) {
++          HVSYSLOG("Skipping ACPI memory range %d crossing the 4 GiB boundary", i);
++          continue;
++        }
++        bool overlaps = false;
++        for (int j = 0; j < i; j++) {
++          if (acpiRanges[j].resourceType != kIOACPIMemoryRange || acpiRanges[j].addressLength == 0 ||
++              acpiRanges[j].addressLength - 1 > UINT64_MAX - acpiRanges[j].minAddressRange) {
++            continue;
++          }
++          UInt64 prevMin = acpiRanges[j].minAddressRange;
++          UInt64 prevEnd = prevMin + (acpiRanges[j].addressLength - 1);
++          if (minAddr <= prevEnd && prevMin <= endAddr) {
++            overlaps = true;
++            break;
++          }
++        }
++        if (overlaps) {
++          HVSYSLOG("Skipping overlapping ACPI memory range %d", i);
++          continue;
++        }
++        if (minAddr > UINT32_MAX) {
++          _rangeAllocatorHigh->deallocate(static_cast<IOPhysicalAddress>(minAddr),
++                                          static_cast<IOPhysicalLength>(lenAddr));
+         } else {
+-          _rangeAllocatorLow->deallocate(static_cast<IOPhysicalAddress>(acpiRanges[i].minAddressRange),
+-                                         static_cast<IOPhysicalLength>(acpiRanges[i].addressLength));
++          _rangeAllocatorLow->deallocate(static_cast<IOPhysicalAddress>(minAddr),
++                                         static_cast<IOPhysicalLength>(lenAddr));
+         }
+       }
+ 
+@@ -138,8 +171,11 @@
+ void HyperVPCIRoot::stop(IOService *provider) {
+   HVDBGLOG("Stopping Hyper-V Root PCI Bridge");
+ 
++  OSSafeReleaseNULL(_rangeAllocatorLow);
++  OSSafeReleaseNULL(_rangeAllocatorHigh);
+   if (_pciLock != nullptr) {
+     IOSimpleLockFree(_pciLock);
++    _pciLock = nullptr;
+   }
+ 
+   super::stop(provider);
+@@ -362,12 +398,14 @@
+     return 0;
+   }
+ 
++  IOInterruptState ints = IOSimpleLockLockDisableInterrupt(_pciLock);
+   if (maxAddress > UINT32_MAX) {
+     result = _rangeAllocatorHigh->allocate(size, &range, alignment);
+   }
+   if (!result) {
+     result = _rangeAllocatorLow->allocate(size, &range, alignment);
+   }
++  IOSimpleLockUnlockEnableInterrupt(_pciLock, ints);
+ 
+   HVDBGLOG("Allocation result for length %p (max %p) - %u", size, maxAddress, result);
+   HVDBGLOG("Range base: %p", result ? range : 0);
+@@ -380,11 +418,13 @@
+     return;
+   }
+ 
++  IOInterruptState ints = IOSimpleLockLockDisableInterrupt(_pciLock);
+   if (start > UINT32_MAX) {
+     _rangeAllocatorHigh->deallocate(start, size);
+   } else {
+     _rangeAllocatorLow->deallocate(start, size);
+   }
++  IOSimpleLockUnlockEnableInterrupt(_pciLock, ints);
+   HVDBGLOG("Freed range base %p length %p", start, size);
+ }
+ 

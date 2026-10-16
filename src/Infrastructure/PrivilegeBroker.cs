@@ -14,7 +14,7 @@ public sealed class PrivilegeBroker(string helperPath) : IPrivilegeBroker
     {
         if (!File.Exists(helperPath)) throw new FileNotFoundException("The privileged helper is missing. Run tools/Build/Build.ps1 to assemble the app.", helperPath);
         var name = "pome-" + Guid.NewGuid().ToString("N");
-        await using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await using var pipe = UserPipe.CreateServer(name);
         var start = new ProcessStartInfo(helperPath) { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden };
         start.Arguments = $"--pipe {name} --parent {Environment.ProcessId}";
         using var helper = Process.Start(start) ?? throw new IOException("The elevated helper did not start.");

@@ -1,0 +1,80 @@
+--- a/MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp
++++ b/MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp
+@@ -232,8 +232,14 @@
+     return status;
+   }
+ 
+-  //
+-  // Allocate and set BARs for PCI device.
++  // Refuse to reprogram an active decoder or bus master. Teardown/quiescence
++  // needs a separate host protocol implementation, not speculative range reuse.
++  if (readPCIConfig(kIOPCIConfigCommand, sizeof (UInt16)) & 0x0006) {
++    return kIOReturnBusy;
++  }
++
++  //
++  // Reserve every BAR before publishing any address to the device.
+   //
+   memset(_bars, 0, sizeof (_bars));
+   memset(_barSizes, 0, sizeof (_barSizes));
+@@ -268,7 +274,12 @@
+     // Check type of BAR (64-bit or 32-bit).
+     // If 64-bit the next BAR is the high 32 bits, and this one is the low 32 bits.
+     //
+-    bool isBar64Bit = barVal & kHyperVPCIBarMemoryType64Bit;
++    UInt32 memoryType = (UInt32)barVal & 0x6;
++    if (memoryType != 0 && memoryType != kHyperVPCIBarMemoryType64Bit) {
++      status = kIOReturnUnsupported;
++      break;
++    }
++    bool isBar64Bit = memoryType == kHyperVPCIBarMemoryType64Bit;
+     if (isBar64Bit && i + 1 >= kHyperVPCIBarCount) {
+       HVSYSLOG("Truncated 64-bit BAR at index %u", i);
+       status = kIOReturnBadArgument;
+@@ -312,21 +323,33 @@
+     }
+     HVDBGLOG("BAR%u will now be located @ phys 0x%llX", i, _bars[i]);
+ 
+-    //
+-    // Write new BAR to PCI device.
+-    //
+-    writePCIConfig(kIOPCIConfigBaseAddress0 + (i * sizeof (UInt32)), sizeof (UInt32), (UInt32)_bars[i]);
+-    if (isBar64Bit) {
+-      writePCIConfig(kIOPCIConfigBaseAddress0 + ((i + 1) * sizeof (UInt32)), sizeof (UInt32), (UInt32)(_bars[i] >> 32));
+-    }
+-
+-    //
+-    // 64-bit BARs take two 32-bit BAR slots, so skip over the next one.
+-    //
+-    HVDBGLOG("BAR%u is now 0x%X", i, readPCIConfig(kIOPCIConfigBaseAddress0 + (i * sizeof (UInt32)), sizeof (UInt32)));
+     if (isBar64Bit) {
+       i++;
+-      HVDBGLOG("BAR%u is now 0x%X (high 32 bits)", i, readPCIConfig(kIOPCIConfigBaseAddress0 + (i * sizeof (UInt32)), sizeof (UInt32)));
++    }
++  }
++
++  if (status != kIOReturnSuccess) {
++    // No BAR has been written and decoding was inactive. These reservations
++    // are private to this failed query and can be safely returned to the root.
++    for (int i = 0; i < kHyperVPCIBarCount; i++) {
++      if (_bars[i] != 0) {
++        _hvPCIRoot->freeRange(_bars[i], _barSizes[i]);
++      }
++    }
++    memset(_bars, 0, sizeof (_bars));
++    memset(_barSizes, 0, sizeof (_barSizes));
++    memset(_barIs64Bit, 0, sizeof (_barIs64Bit));
++    return status;
++  }
++
++  for (int i = 0; i < kHyperVPCIBarCount; i++) {
++    if (_bars[i] == 0) {
++      continue;
++    }
++    writePCIConfig(kIOPCIConfigBaseAddress0 + (i * sizeof (UInt32)), sizeof (UInt32), (UInt32)_bars[i]);
++    if (_barIs64Bit[i]) {
++      writePCIConfig(kIOPCIConfigBaseAddress0 + ((i + 1) * sizeof (UInt32)), sizeof (UInt32), (UInt32)(_bars[i] >> 32));
++      i++;
+     }
+   }
+ 

@@ -28,7 +28,20 @@ The bridge advertises device ranges to macOS through `addBridgeMemoryRange`, pro
 - Derives BAR size using the declared width rather than inferring width from its numerical mask; rejects malformed sizes and overflow/range violations.
 - Fails bridge configuration if macOS rejects a memory aperture, instead of ignoring that result.
 
-Both patches apply to the pinned source. They have **not** been compiled with the macOS kernel SDK, loaded in a guest or validated on physical hardware. The default packaged EFI does not contain them. The pure C# allocator tests exercise planning invariants, not execution of the kernel patches.
+`0003-reserve-bars-before-programming.patch`:
+
+- Refuses to reprogram BARs when memory decoding or bus mastering is already active in `kIOPCIConfigCommand` (`0x0006`), returning `kIOReturnBusy`.
+- Rejects unsupported PCI memory BAR type encodings (`memoryType != 0 && memoryType != 4`).
+- Reserves all required BAR apertures from `HyperVPCIRoot` before writing any BAR register to the device, and frees all reserved ranges cleanly if any BAR allocation fails.
+
+`0004-acpi-admission-locking-and-teardown.patch`:
+
+- Validates ACPI memory descriptors in `HyperVPCIRoot::start` before admitting them to the low or high `IORangeAllocator`: rejects zero base/length, `UInt64` addition overflow, `maxAddressRange < endAddr`, ranges crossing the 4 GiB boundary (`minAddr <= UINT32_MAX && endAddr > UINT32_MAX`), and overlapping descriptors.
+- Protects `_rangeAllocatorLow` and `_rangeAllocatorHigh` allocations and deallocations under `_pciLock`, and releases both allocators in `HyperVPCIRoot::stop`.
+- Preserves low attribute bits (`pktReqResponse.probedBARs[i] & 0x0FU`) when writing BARs, verifies low and high DWORD readback against the programmed address and memory type flags, and zeroes/frees BARs on readback mismatch.
+- Implements `HyperVPCIBridge::stop` to disable memory/bus-master decoding, return allocated BAR and config-window ranges to `HyperVPCIRoot`, and release descriptors, function tables, locks and VMBus device references.
+
+All four patches apply sequentially to fresh copies of the pinned source (`cafcd34daea5e58633112a1e63cef1f07bbc8404`). `tools/Validation/TestPciPatches.py` verifies `git apply --check`, applies the series, compiles the extracted patched `HyperVPCIBridge::queryResourceRequirements` and `getBarSize` C++ implementation with MSVC (`cl.exe`), and passes **21 allocation, fault-injection, active-decoder, and BAR readback verification scenarios** against fake IOKit/VMBus boundaries. Full kext compilation still requires a macOS Xcode/Kernel SDK, and physical hardware passthrough remains unverified. The default packaged EFI (`OSX-Hyper-V 0.4.0`, carrying `MacHyperVSupport 0.9.10`) does not contain these patches.
 
 ## Workarounds worth testing
 
@@ -44,7 +57,7 @@ NullMoth's current `docs/CARD-SUPPORT.md` explicitly states that its fallback st
 
 ## Remaining engineering gates
 
-Before any patched driver is considered usable, implement/review transactional BAR allocation and teardown across all failure paths (the current bridge does not provide sufficient rollback), strict ACPI range admission including crossing/overlapping apertures, allocator concurrency, resource-reservation cleanup, and multiple PCI functions. Verify that endpoint BAR type bits remain correct after programming. The opt-in patch alone is intentionally not promoted as the complete fix.
+Before any patched driver is considered usable on hardware, validate VMBus host resource-release acknowledgement (`kHyperVPCIBridgeMessageTypeBusD0Exit` / `ResourcesReleased`) during live device stop, multi-function (`slot != 0`) enumeration and config-window routing, full Xcode/macOS SDK compilation, and actual Hyper-V Server DDA behavior. The opt-in patch series is a source-level engineering candidate, not a certified passthrough release.
 
 Instrument the exact advertised ACPI ranges, requested probe masks, allocated GPA intervals, BAR low/high readback, ResourcesAssigned device status, `addBridgeMemoryRange` result, MSI address/data, IOMemoryDescriptor mappings and driver matching. Avoid broad telemetry dumps containing machine identifiers.
 

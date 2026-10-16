@@ -55,7 +55,7 @@ try {
     $boot = Get-VMHardDiskDrive -VM $vm | Where-Object { $_.Path -eq $efi }
     Set-VMFirmware -VM $vm -EnableSecureBoot Off -FirstBootDevice $boot
     Save-Stage 'Created' 'VM configured. Guest boot and macOS installation have not been verified.' $true
-    @{ success=$true; message='VM created. Start it and open the console to validate the prepared boot media.'; vmId=$vm.Id.ToString(); resourceDirectory=$root } | ConvertTo-Json -Compress
+    @{ success=$true; message='VM created. Start it and open the console to validate the prepared boot media.'; vmId=$vm.Id.ToString(); resourceDirectory=$root; stage='Created' } | ConvertTo-Json -Compress
 } catch {
     $failure = $_.Exception.Message
     # The new VM has never been started. Remove only this exact registration, and preserve every disk.
@@ -63,5 +63,5 @@ try {
         try { Remove-VM -VM $vm -Force -ErrorAction Stop } catch { $failure += ' VM registration rollback failed: ' + $_.Exception.Message }
     }
     Save-Stage 'NeedsAttention' $failure $false
-    @{ success=$false; message=($failure + ' Files were preserved; inspect operation.json before retrying.'); resourceDirectory=$root } | ConvertTo-Json -Compress
+    @{ success=$false; message=($failure + ' Files were preserved; inspect operation.json before retrying.'); resourceDirectory=$root; stage='NeedsAttention' } | ConvertTo-Json -Compress
 }
