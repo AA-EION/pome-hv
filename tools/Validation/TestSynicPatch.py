@@ -15,7 +15,8 @@ method = '''void HyperVController::sendSynICEOM(UInt32 cpu) {
     return;
   }
   _cpuData[cpu].messages[kVMBusInterruptMessage].type = kHyperVMessageTypeNone;
-  OSMemoryBarrier();
+  // Full barrier between clearing the slot and reading messagePending; same builtin as upstream VMBus code.
+  __sync_synchronize();
   if (!_cpuData[cpu].messages[kVMBusInterruptMessage].flags.messagePending) {
     return;
   }
@@ -33,7 +34,6 @@ callback = '''extern "C" void doAllCpuSyncICEOM(void *cpu) {
 }'''
 start = old.index('void HyperVController::sendSynICEOM(UInt32 cpu) {')
 new = old[:start] + method
-new = new.replace('#include "VMBus.hpp"', '#include "VMBus.hpp"\n#include <libkern/OSAtomic.h>')
 start = new.index('#if __MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_10_6\nextern "C" void doAllCpuSyncICEOM')
 end = new.index('\n#endif', start) + len('\n#endif')
 new = new[:start] + callback + new[end:]
@@ -64,7 +64,7 @@ int currentCpu=0, barriers=0, rendezvous=0;
 std::vector<int> acknowledgements;
 int cpu_number() { return currentCpu; }
 void wrmsr64(uint32_t msr, uint64_t value) { assert(msr==kHyperVMsrEom && value==0); acknowledgements.push_back(currentCpu); }
-void OSMemoryBarrier() { ++barriers; std::atomic_thread_fence(std::memory_order_seq_cst); }
+void __sync_synchronize() { ++barriers; std::atomic_thread_fence(std::memory_order_seq_cst); }
 #define HVSYSLOG(...) ((void)0)
 struct Message { int type=1; struct { bool messagePending=false; } flags; };
 struct CpuData { Message messages[3]; };

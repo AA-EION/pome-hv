@@ -1,14 +1,6 @@
 --- a/MacHyperVSupport/Controller/HyperVControllerInterrupts.cpp
 +++ b/MacHyperVSupport/Controller/HyperVControllerInterrupts.cpp
-@@ -8,6 +8,7 @@
- #include "HyperVController.hpp"
- #include "HyperVInterruptController.hpp"
- #include "VMBus.hpp"
-+#include <libkern/OSAtomic.h>
- 
- #if __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_6
- //
-@@ -83,16 +84,12 @@
+@@ -83,16 +83,12 @@
    wrmsr64(kHyperVMsrSyncICControl, kHyperVMsrSyncICControlEnable | (rdmsr64(kHyperVMsrSyncICControl) & kHyperVMsrSyncICControlRsvdMask));
  }
  
@@ -27,7 +19,7 @@
  
  bool HyperVController::allocateInterruptBuffers() {
    //
-@@ -311,48 +308,17 @@
+@@ -311,48 +307,18 @@
  }
  
  void HyperVController::sendSynICEOM(UInt32 cpu) {
@@ -39,7 +31,8 @@
 +    return;
 +  }
    _cpuData[cpu].messages[kVMBusInterruptMessage].type = kHyperVMessageTypeNone;
-+  OSMemoryBarrier();
++  // Full barrier between clearing the slot and reading messagePending; same builtin as upstream VMBus code.
++  __sync_synchronize();
    if (!_cpuData[cpu].messages[kVMBusInterruptMessage].flags.messagePending) {
      return;
    }
