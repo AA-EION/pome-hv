@@ -52,6 +52,14 @@
                 <ComboBox Header="Network" ItemsSource="{Binding Switches}" SelectedItem="{Binding EditSwitch, Mode=TwoWay}" HorizontalAlignment="Stretch"/>
                 <Button Content="Review &amp; apply settings" Click="ApplyVmSettings" Style="{StaticResource AccentButtonStyle}"/>
               </StackPanel></ContentControl>
+              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+              <StackPanel Spacing="10">
+                <TextBlock Text="GPU partition (experimental)" Style="{StaticResource SectionTitle}"/>
+                <TextBlock Text="{Binding GpuPartitionSummary}" TextWrapping="Wrap"/>
+                <TextBlock Text="Hyper-V GPU partitioning gives macOS a paravirtual device (PCI 1414:008E plus dxgkrnl VMBus channels), not an NVIDIA card. No macOS driver uses it yet, so it does not accelerate graphics; it is offered on Tahoe VMs for guest-driver development. The VM cannot checkpoint or save state while a partition is attached." Style="{StaticResource Hint}"/>
+                <ComboBox Header="Partitionable GPU" ItemsSource="{Binding PartitionableGpus}" SelectedItem="{Binding SelectedPartitionGpu, Mode=TwoWay}" HorizontalAlignment="Stretch" IsEnabled="{Binding CanAddGpuPartition}"><ComboBox.ItemTemplate><DataTemplate x:DataType="core:PartitionableGpu"><TextBlock Text="{x:Bind Name}"/></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="Attach GPU partition…" Click="AddGpuPartition" IsEnabled="{Binding CanAddGpuPartition}"/><Button Content="Remove GPU partition…" Click="RemoveGpuPartition" IsEnabled="{Binding CanRemoveGpuPartition}"/></StackPanel>
+              </StackPanel>
             </StackPanel></ScrollViewer></PivotItem>
 <PivotItem Header="Storage"><ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Spacing="20" Padding="0,16,8,20">
               <StackPanel Spacing="16">

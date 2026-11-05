@@ -68,6 +68,23 @@ public static class CreationPreflight
         return folder;
     }
 
+    /// <summary>Reads guest.json from the VM's own pome folder, or null for VMs created before it existed.</summary>
+    public static GuestRecord? TryReadGuestRecord(VmInfo vm, VmDetails details)
+    {
+        try
+        {
+            if (!vm.Managed || !Guid.TryParse(vm.Notes["pome:v1:".Length..], out var operation)) return null;
+            var folder = details.Disks.Select(x => Path.GetDirectoryName(x.Path)).FirstOrDefault(x => x is not null
+                && string.Equals(Path.GetFileName(x), "pome-" + operation.ToString("N"), StringComparison.OrdinalIgnoreCase));
+            if (folder is null) return null;
+            var file = Path.Combine(SafePaths.RequireLocal(folder), "guest.json");
+            if (!File.Exists(file) || new FileInfo(file).Length > 4096) return null;
+            var record = Json.Read<GuestRecord>(File.ReadAllText(file));
+            return record.SchemaVersion == 1 && MacOsCatalog.Find(record.MacOsVersion) is not null ? record : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) { return null; }
+    }
+
     private static void RequireVhdx(string path)
     {
         var local = SafePaths.RequireLocal(path);

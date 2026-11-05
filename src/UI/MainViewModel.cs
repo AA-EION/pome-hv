@@ -49,7 +49,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (changingList) return;
             var changedId = selectedVm?.Id != value?.Id;
             selectedVm = value;
-            if (changedId) { Details = null; Disks.Clear(); Checkpoints.Clear(); BootOrder.Clear(); SelectedCheckpoint = null; Changed(nameof(SelectedCheckpoint)); Changed(nameof(DetailsSummary)); }
+            if (changedId) { Details = null; Disks.Clear(); Checkpoints.Clear(); BootOrder.Clear(); PartitionableGpus.Clear(); SelectedCheckpoint = null; Changed(nameof(SelectedCheckpoint)); Changed(nameof(DetailsSummary)); }
             Changed(); NotifySelection();
         }
     }
@@ -108,7 +108,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool CanEditSelected => CanManageSelected && Details?.VmId == SelectedVm?.Id;
     private void NotifySelection()
     {
-        foreach (var name in new[] { nameof(SelectedTitle), nameof(SelectedSummary), nameof(OwnershipSummary), nameof(CanInspectSelected), nameof(CanStartSelected), nameof(CanShutdownSelected), nameof(CanPauseSelected), nameof(CanResumeSelected), nameof(CanSaveSelected), nameof(CanTurnOffSelected), nameof(CanResetSelected), nameof(CanDeleteSelected), nameof(CanOpenSelectedFolder), nameof(CanManageSelected), nameof(CanEditSelected), nameof(SelectionVisibility), nameof(EmptySelectionVisibility), nameof(DetailsVisibility), nameof(LoadDetailsVisibility), nameof(LibraryCount), nameof(SelectedCpu), nameof(SelectedMemory), nameof(SelectedUsage), nameof(SelectedNetwork), nameof(EmptyTitle), nameof(EmptyDescription) }) Changed(name);
+        foreach (var name in new[] { nameof(SelectedTitle), nameof(SelectedSummary), nameof(OwnershipSummary), nameof(CanInspectSelected), nameof(CanStartSelected), nameof(CanShutdownSelected), nameof(CanPauseSelected), nameof(CanResumeSelected), nameof(CanSaveSelected), nameof(CanTurnOffSelected), nameof(CanAddGpuPartition), nameof(CanRemoveGpuPartition), nameof(GpuPartitionSummary), nameof(CanResetSelected), nameof(CanDeleteSelected), nameof(CanOpenSelectedFolder), nameof(CanManageSelected), nameof(CanEditSelected), nameof(SelectionVisibility), nameof(EmptySelectionVisibility), nameof(DetailsVisibility), nameof(LoadDetailsVisibility), nameof(LibraryCount), nameof(SelectedCpu), nameof(SelectedMemory), nameof(SelectedUsage), nameof(SelectedNetwork), nameof(EmptyTitle), nameof(EmptyDescription) }) Changed(name);
     }
     private void FilterMachines()
     {
@@ -137,10 +137,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Checkpoints.Clear(); foreach (var checkpoint in details.Checkpoints) Checkpoints.Add(checkpoint);
         SelectedCheckpoint = null; Changed(nameof(SelectedCheckpoint));
         BootOrder.Clear(); foreach (var boot in details.BootOrder) BootOrder.Add(boot);
+        PartitionableGpus.Clear(); foreach (var gpu in details.PartitionableGpus ?? []) PartitionableGpus.Add(gpu);
+        SelectedPartitionGpu = PartitionableGpus.FirstOrDefault(); Changed(nameof(SelectedPartitionGpu));
         foreach (var name in new[] { nameof(EditName), nameof(EditCpuCount), nameof(EditMemoryGiB), nameof(EditSwitch), nameof(DetailsSummary) }) Changed(name);
         NotifySelection();
     }
     public ObservableCollection<string> Switches { get; } = ["Disconnected"];
+    public ObservableCollection<PartitionableGpu> PartitionableGpus { get; } = [];
+    public PartitionableGpu? SelectedPartitionGpu { get; set; }
+    private bool SelectedIsTahoe => MacOsCatalog.Find(Details?.GuestMacOsVersion) is { Darwin: >= GpuPartitionPolicy.MinimumDarwin };
+    public bool CanAddGpuPartition => CanEditSelected && SelectedIsTahoe && (Details?.GpuPartitions ?? []).Length == 0 && PartitionableGpus.Count > 0 && Details!.Checkpoints.Length == 0;
+    public bool CanRemoveGpuPartition => CanEditSelected && (Details?.GpuPartitions ?? []).Length > 0;
+    public string GpuPartitionSummary
+    {
+        get
+        {
+            if (Details is null) return "Load settings to see GPU partitions.";
+            if ((Details.GpuPartitions ?? []).Length > 0)
+                return "Attached: " + string.Join(", ", Details.GpuPartitions!.Select(path => Details.PartitionableGpus?.FirstOrDefault(g => string.Equals(g.InstancePath, path, StringComparison.OrdinalIgnoreCase))?.Name ?? path));
+            var release = MacOsCatalog.Find(Details.GuestMacOsVersion);
+            if (release is null) return "Unavailable: pome has no record of this VM's macOS version (VMs created before this release). Create a Tahoe VM to try GPU partitioning.";
+            if (release.Darwin < GpuPartitionPolicy.MinimumDarwin) return $"Unavailable for {release.DisplayName}: GPU partitioning is limited to macOS 26 Tahoe VMs.";
+            if (PartitionableGpus.Count == 0) return "This computer reports no partitionable GPU. GPU partitioning needs Windows 11 or Server 2022+ and a GPU driver that supports GPU-P.";
+            return Details.Checkpoints.Length > 0 ? "Delete this VM's checkpoints before attaching a GPU partition." : "No GPU partition attached.";
+        }
+    }
     public ObservableCollection<string> AvailableNetworks { get; } = [];
     public ObservableCollection<string> Gpus { get; } = [];
     public ObservableCollection<JournalEntry> Activity { get; } = [];

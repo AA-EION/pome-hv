@@ -17,6 +17,7 @@ public static class VmManagementPolicy
             OperationKind.TurnOff => vm.CanTurnOff,
             OperationKind.Reset => vm.CanReset,
             OperationKind.DeleteVm => vm.CanDelete,
+            OperationKind.AddGpuPartition or OperationKind.RemoveGpuPartition => vm.CanConfigure,
             OperationKind.Configure or OperationKind.Checkpoint or OperationKind.RestoreCheckpoint or
                 OperationKind.DeleteCheckpoint or OperationKind.RepairBoot or OperationKind.Export or OperationKind.ResizeDisk or OperationKind.ExportBootLogs => vm.CanConfigure,
             _ => false

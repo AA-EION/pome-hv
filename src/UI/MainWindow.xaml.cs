@@ -350,6 +350,20 @@ public sealed partial class MainWindow : Window
         var result = await ViewModel.ExecuteAsync(new(OperationKind.DeleteVm, VmId: vm.Id, DeleteFiles: removeFiles));
         if (result is not null) await ShowNoticeAsync(result.Success ? "Virtual machine removed" : $"Could not remove {vm.Name}", result.Message);
     }
+    private async void AddGpuPartition(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedVm is not { } vm || ViewModel.SelectedPartitionGpu is not { } gpu || !ViewModel.CanAddGpuPartition) return;
+        if (!await Confirm("Attach a GPU partition?", $"{gpu.Name} will be partitioned for {vm.Name}. Pome sets guest-controlled caching, a 1 GB low and 32 GB high memory-mapped I/O gap, and disables checkpoints, saving the previous values so Remove restores them.\n\nThis is experimental: macOS has no GPU-PV driver yet, so graphics stay on the synthetic display. The host GPU keeps working for Windows.", "Attach")) return;
+        var result = await ViewModel.ExecuteAsync(new(OperationKind.AddGpuPartition, VmId: vm.Id, GpuInstancePath: gpu.InstancePath));
+        if (result is not null) await ShowNoticeAsync(result.Success ? "GPU partition attached" : "Could not attach the GPU partition", result.Message);
+    }
+    private async void RemoveGpuPartition(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedVm is not { } vm || !ViewModel.CanRemoveGpuPartition) return;
+        if (!await Confirm("Remove the GPU partition?", $"Pome removes the GPU partition from {vm.Name} and restores the memory-mapped I/O, cache and checkpoint settings it saved when attaching.", "Remove")) return;
+        var result = await ViewModel.ExecuteAsync(new(OperationKind.RemoveGpuPartition, VmId: vm.Id));
+        if (result is not null) await ShowNoticeAsync(result.Success ? "GPU partition removed" : "Could not remove the GPU partition", result.Message);
+    }
     private async void GrantHyperVAccess(object sender, RoutedEventArgs e)
     {
         if (await Confirm("Join Hyper-V Administrators?", "Windows adds your account to the built-in Hyper-V Administrators group. Members can create, change and control every virtual machine on this computer without an administrator prompt. Pome still asks for approval for creation, disks and files. Sign out and back in for the change to take effect. You can remove yourself later in Computer Management → Local Users and Groups.", "Join group"))

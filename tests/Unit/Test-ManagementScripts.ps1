@@ -17,6 +17,7 @@ function Reset-Fixture {
     $script:targetSize = 100GB
     $script:mutations = [Collections.Generic.List[string]]::new()
     $script:shutdownStatus = 'Ok'
+    $script:gpuAdapters = @(); $script:gpuFails = $false
 }
 function Test([string]$name, [scriptblock]$body) {
     Reset-Fixture
@@ -56,7 +57,13 @@ function Get-VHD { [CmdletBinding()] param($Path) [pscustomobject]@{ Size=$(if (
 function Resize-VHD { [CmdletBinding()] param($Path, $SizeBytes) $script:mutations.Add('Resize'); $script:targetSize = $SizeBytes }
 function Set-VMFirmware { param($VM, $FirstBootDevice) $script:mutations.Add('Boot') }
 function Get-VMSnapshot { param($VM, $SnapshotType) $script:snapshots }
-function Set-VM { param($VM, $CheckpointType) $VM.CheckpointType = $CheckpointType }
+function Set-VM {
+    [CmdletBinding()] param($VM, $CheckpointType, $GuestControlledCacheTypes, $LowMemoryMappedIoSpace, $HighMemoryMappedIoSpace)
+    if ($PSBoundParameters.ContainsKey('CheckpointType')) { $VM.CheckpointType = $CheckpointType }
+    if ($PSBoundParameters.ContainsKey('GuestControlledCacheTypes')) { $VM | Add-Member -Force GuestControlledCacheTypes $GuestControlledCacheTypes }
+    if ($PSBoundParameters.ContainsKey('LowMemoryMappedIoSpace')) { $VM | Add-Member -Force LowMemoryMappedIoSpace $LowMemoryMappedIoSpace }
+    if ($PSBoundParameters.ContainsKey('HighMemoryMappedIoSpace')) { $VM | Add-Member -Force HighMemoryMappedIoSpace $HighMemoryMappedIoSpace }
+}
 function Checkpoint-VM { param($VM, $SnapshotName) if ($script:checkpointFails) { throw 'Injected checkpoint failure' }; $script:mutations.Add('Checkpoint') }
 function Restore-VMSnapshot { param($VMSnapshot, $Confirm) $script:mutations.Add('Restore') }
 function Remove-VMSnapshot { param($VMSnapshot, $Confirm) $script:mutations.Add('Delete') }
@@ -70,6 +77,11 @@ function Get-VMIntegrationService { param($VM) [pscustomobject]@{ Id=('Microsoft
 function Suspend-VM { [CmdletBinding()] param($VM) $script:mutations.Add('Pause') }
 function Resume-VM { [CmdletBinding()] param($VM) $script:mutations.Add('Resume') }
 function Save-VM { [CmdletBinding()] param($VM) $script:mutations.Add('Save') }
+function Get-VMHostPartitionableGpu { [CmdletBinding()] param() [pscustomobject]@{ Name='\\?\PCI#VEN_10DE&DEV_28E0#4&1#{g}' } }
+function Get-CimInstance { [CmdletBinding()] param($ClassName) if ($ClassName -eq 'Win32_VideoController') { [pscustomobject]@{ PNPDeviceID='PCI\VEN_10DE&DEV_28E0\4&1'; Name='NVIDIA Fixture GPU' } } else { [pscustomobject]@{ FreePhysicalMemory=($script:freeBytes / 1024) } } }
+function Get-VMGpuPartitionAdapter { [CmdletBinding()] param($VM) $script:gpuAdapters }
+function Add-VMGpuPartitionAdapter { [CmdletBinding()] param($VM, $InstancePath) if ($script:gpuFails) { throw 'Injected GPU failure' }; $script:gpuAdapters = @([pscustomobject]@{ InstancePath=$InstancePath }) }
+function Remove-VMGpuPartitionAdapter { [CmdletBinding()] param([Parameter(ValueFromPipeline)]$InputObject) process { $script:gpuAdapters = @() } }
 function Manage($request) { $p = $request; . $management | ConvertFrom-Json }
 function Lifecycle($kind) { $p = @{ kind=$kind; vmId=$script:fixture.Id }; . $lifecycle | ConvertFrom-Json }
 
@@ -181,6 +193,35 @@ Test 'Removal rechecks disks and checkpoints before unregistering' {
     $script:fixture.State = 'Off'; $script:fixture.Notes = 'external'
     Reject { Manage $request } 'read-only'
     Assert ($script:mutations.Count -eq 0) 'A running or external VM was removed.'
+}
+Test 'GPU partition attach saves settings, configures MMIO and rolls back on failure' {
+    $folder = Join-Path ([IO.Path]::GetTempPath()) ('pome-gpu-' + [Guid]::NewGuid().ToString('N')); New-Item -ItemType Directory $folder | Out-Null
+    $script:gpuAdapters = @(); $script:gpuFails = $false
+    $script:fixture | Add-Member -Force GuestControlledCacheTypes $false; $script:fixture | Add-Member -Force LowMemoryMappedIoSpace 128MB
+    $script:fixture | Add-Member -Force HighMemoryMappedIoSpace 512MB
+    $request = @{ kind='AddGpuPartition'; vmId=$script:fixture.Id; gpuInstancePath='\\?\PCI#VEN_10DE&DEV_28E0#4&1#{g}'; operationFolder=$folder; lowMmioBytes=1GB; highMmioBytes=32GB }
+    $script:gpuFails = $true
+    Reject { Manage $request } 'Injected GPU failure'
+    Assert (-not $script:fixture.GuestControlledCacheTypes -and $script:fixture.HighMemoryMappedIoSpace -eq 512MB -and $script:fixture.CheckpointType -eq 'Production') 'Failed attach did not roll back.'
+    $script:gpuFails = $false
+    $result = Manage $request
+    Assert ($result.success -and $script:gpuAdapters.Count -eq 1 -and $script:fixture.GuestControlledCacheTypes -and $script:fixture.HighMemoryMappedIoSpace -eq 32GB -and $script:fixture.CheckpointType -eq 'Disabled') 'Attach did not configure the VM.'
+    Assert ($result.details.gpuPartitions.Count -eq 1 -and $result.details.partitionableGpus[0].name -eq 'NVIDIA Fixture GPU') 'Details omit the partition or GPU name.'
+    $saved = Get-Content (Join-Path $folder 'gpu-partition.json') -Raw | ConvertFrom-Json
+    Assert ($saved.highMmioBytes -eq 512MB -and $saved.checkpointType -eq 'Production') 'Original settings were not recorded.'
+    Reject { Manage $request } 'already has a GPU partition'
+    $request.kind = 'RemoveGpuPartition'
+    $result = Manage $request
+    Assert ($result.success -and $script:gpuAdapters.Count -eq 0 -and $script:fixture.HighMemoryMappedIoSpace -eq 512MB -and $script:fixture.CheckpointType -eq 'Production' -and -not (Test-Path (Join-Path $folder 'gpu-partition.json'))) 'Remove did not restore settings.'
+    Remove-Item -LiteralPath $folder -Recurse
+}
+Test 'GPU partition attach rejects an unknown host GPU and checkpoints' {
+    $script:gpuAdapters = @(); $script:gpuFails = $false
+    $request = @{ kind='AddGpuPartition'; vmId=$script:fixture.Id; gpuInstancePath='\\?\PCI#VEN_1002#other#{g}'; operationFolder=[IO.Path]::GetTempPath(); lowMmioBytes=1GB; highMmioBytes=32GB }
+    Reject { Manage $request } 'no longer partitionable'
+    $script:snapshots = @([pscustomobject]@{ Id=[Guid]::NewGuid() })
+    Reject { Manage $request } 'checkpoints'
+    Assert ($script:gpuAdapters.Count -eq 0) 'A GPU was attached despite failed checks.'
 }
 Write-Host "$script:passed/$script:passed management script scenarios passed. No real Hyper-V operations ran."
 Test 'New destination initialization uses only the disk returned by mounting its exact VHDX' {

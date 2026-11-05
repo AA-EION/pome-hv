@@ -5,6 +5,24 @@ if ($p.kind -ne 'InspectVm') {
     if ($vm.State -ne 'Off') { throw 'Shut down this VM before changing settings, checkpoints or backups.' }
 }
 $message = 'VM details loaded.'
+function Get-PartitionableGpus {
+    # Windows 11 / Server 2022 name the cmdlet Get-VMHostPartitionableGpu; Windows 10 uses Get-VMPartitionableGpu.
+    $command = @('Get-VMHostPartitionableGpu', 'Get-VMPartitionableGpu') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+    if (-not $command) { return @() }
+    $controllers = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
+    @(& $command -ErrorAction Stop | ForEach-Object {
+        $path = [string]$_.Name
+        $trimmed = $(if ($path.StartsWith('\\?\')) { $path.Substring(4) } else { $path })
+        $parts = $trimmed.Split('#')
+        $pnp = $(if ($parts.Count -ge 3) { $parts[0..2] -join '\' } else { '' })
+        $match = @($controllers | Where-Object { [string]$_.PNPDeviceID -ieq $pnp })
+        @{ instancePath=$path; name=$(if ($match.Count -gt 0) { [string]$match[0].Name } else { 'Partitionable GPU' }) }
+    })
+}
+function Get-GpuPartitionPaths($machine) {
+    if (-not (Get-Command Get-VMGpuPartitionAdapter -ErrorAction SilentlyContinue)) { return @() }
+    @(Get-VMGpuPartitionAdapter -VM $machine -ErrorAction Stop | ForEach-Object { [string]$_.InstancePath })
+}
 switch ($p.kind) {
     'InspectVm' { }
     'Configure' {
@@ -72,6 +90,42 @@ switch ($p.kind) {
         Resize-VHD -Path $target[0].Path -SizeBytes $newSize -ErrorAction Stop
         $message = 'Virtual disk expanded. Start macOS and use Disk Utility to expand the APFS partition/container into the new space. Guest partitions were not modified.'
     }
+    'AddGpuPartition' {
+        # The helper verified ownership, the Tahoe guest record and the operation folder.
+        if (@(Get-VMSnapshot -VM $vm).Count -ne 0) { throw 'Delete this VM''s checkpoints first. Hyper-V cannot checkpoint or save a VM with a GPU partition.' }
+        if (@(Get-GpuPartitionPaths $vm).Count -ne 0) { throw 'This VM already has a GPU partition.' }
+        $gpu = @(Get-PartitionableGpus | Where-Object { $_.instancePath -ieq [string]$p.gpuInstancePath })
+        if ($gpu.Count -ne 1) { throw 'The selected GPU is no longer partitionable on this computer. Refresh the VM''s settings.' }
+        $record = Join-Path ([string]$p.operationFolder) 'gpu-partition.json'
+        $original = @{ guestControlledCacheTypes=[bool]$vm.GuestControlledCacheTypes; lowMmioBytes=[UInt64]$vm.LowMemoryMappedIoSpace;
+            highMmioBytes=[UInt64]$vm.HighMemoryMappedIoSpace; checkpointType=[string]$vm.CheckpointType; instancePath=[string]$p.gpuInstancePath }
+        # Keep the first recorded settings if an earlier attempt left the file behind.
+        if (-not (Test-Path -LiteralPath $record)) { [IO.File]::WriteAllText($record, ($original | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false)) }
+        try {
+            Set-VM -VM $vm -GuestControlledCacheTypes $true -LowMemoryMappedIoSpace ([UInt64]$p.lowMmioBytes) -HighMemoryMappedIoSpace ([UInt64]$p.highMmioBytes) -CheckpointType Disabled -ErrorAction Stop
+            Add-VMGpuPartitionAdapter -VM $vm -InstancePath ([string]$p.gpuInstancePath) -ErrorAction Stop
+        } catch {
+            $failure = $_.Exception.Message
+            try {
+                Set-VM -VM $vm -GuestControlledCacheTypes $original.guestControlledCacheTypes -LowMemoryMappedIoSpace $original.lowMmioBytes -HighMemoryMappedIoSpace $original.highMmioBytes -CheckpointType $original.checkpointType -ErrorAction Stop
+            } catch { $failure += ' Settings rollback failed: ' + $_.Exception.Message }
+            throw $failure
+        }
+        $message = 'GPU partition attached. macOS has no GPU-PV driver yet, so this does not accelerate graphics; the guest can now see virtual PCI device 1414:008E for driver development. Checkpoints are disabled while it is attached.'
+    }
+    'RemoveGpuPartition' {
+        $adapters = @(Get-VMGpuPartitionAdapter -VM $vm -ErrorAction Stop)
+        if ($adapters.Count -eq 0) { throw 'This VM has no GPU partition.' }
+        $adapters | Remove-VMGpuPartitionAdapter -ErrorAction Stop
+        $record = Join-Path ([string]$p.operationFolder) 'gpu-partition.json'
+        $message = 'GPU partition removed.'
+        if (Test-Path -LiteralPath $record) {
+            $original = Get-Content -LiteralPath $record -Raw | ConvertFrom-Json
+            Set-VM -VM $vm -GuestControlledCacheTypes ([bool]$original.guestControlledCacheTypes) -LowMemoryMappedIoSpace ([UInt64]$original.lowMmioBytes) -HighMemoryMappedIoSpace ([UInt64]$original.highMmioBytes) -CheckpointType ([string]$original.checkpointType) -ErrorAction Stop
+            Remove-Item -LiteralPath $record -ErrorAction Stop
+            $message += ' Memory-mapped I/O, cache and checkpoint settings were restored.'
+        }
+    }
     'DeleteVm' {
         if (@(Get-VMSnapshot -VM $vm).Count -ne 0) { throw 'Delete this VM''s checkpoints before removing it.' }
         # The helper verified this folder; recheck that every disk still lives in it before unregistering.
@@ -102,7 +156,9 @@ try {
     $details = @{ vmId=$vm.Id.ToString(); name=$vm.Name; cpuCount=[int]$vm.ProcessorCount; startupMemoryBytes=[UInt64]$vm.MemoryStartup;
         switchName=$(if ($network.Count -eq 1) { $network[0].SwitchName } else { $null }); configurationLocation=[string]$vm.ConfigurationLocation;
         secureBoot=$(if ($firmware) { [string]$firmware.SecureBoot } else { 'Not applicable' }); disks=$disks; checkpoints=$checkpoints;
-        bootOrder=@(if ($firmware) { $firmware.BootOrder | ForEach-Object { [string]$_.Description } }) }
+        bootOrder=@(if ($firmware) { $firmware.BootOrder | ForEach-Object { [string]$_.Description } });
+        gpuPartitions=@(try { Get-GpuPartitionPaths $vm } catch { });
+        partitionableGpus=@(try { Get-PartitionableGpus } catch { }) }
 } catch {
     if ($p.kind -eq 'InspectVm') { throw }
     $message += ' Details could not be refreshed: ' + $_.Exception.Message

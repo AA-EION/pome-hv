@@ -28,7 +28,8 @@
 | NullMoth separate download | Implemented | Simulated downloader tests; no driver install or execution |
 | PCI correctness / high-MMIO patches (`0001`–`0004`) | Source candidates | Sequential apply + 21 MSVC allocation/fault/readback scenarios pass; macOS SDK build and hardware tests pending |
 | Reims vGPU / Windows Vulkan paravirt research | Audited (`docs/GPU_ACCELERATION_RESEARCH.md`) | `c099dd5` lacks Windows OS/surface modules; requires separate QEMU/WHPX backend port |
-| DDA, GPU-P, Metal | Disabled / unverified | All hardware milestones pending |
+| GPU partition (GPU-P) host side | Experimental, Tahoe only | Attach/remove `Add-VMGpuPartitionAdapter` with MMIO/cache/checkpoint settings saved and restored; script-double tested, not run on a real host. macOS has no GPU-PV driver, so no acceleration (see `docs/GPU_P_MACOS.md`) |
+| DDA, Metal | Disabled / unverified | All hardware milestones pending |
 | Diagnostics | Host JSON report + VM boot-log export | Host report remains privacy-filtered. Off-state, owned, non-checkpointed EFI log export is read-only, bounded and local; file logging enabled on new automatic media. Event Log integration remains unavailable |
 | Installer | Definition provided | Unsigned, not compiled or installed in this session |
 

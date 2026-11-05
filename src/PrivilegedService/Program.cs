@@ -54,6 +54,23 @@ internal static class Program
                 // The pipe owner check guarantees this helper runs as the requesting user; never take a SID from the request.
                 using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
                     return Json.Read<OperationResult>(await runner.RunAsync("GrantHyperVAccess", new { userSid = identity.User?.Value ?? throw new InvalidDataException("The signed-in user could not be identified.") }));
+            case OperationKind.AddGpuPartition:
+            case OperationKind.RemoveGpuPartition:
+                {
+                    var gpuVm = (await new HyperVManager(runner).ListAsync()).SingleOrDefault(x => x.Id == request.VmId)
+                        ?? throw new InvalidDataException("The selected VM no longer exists.");
+                    VmManagementPolicy.RequireAllowed(request, gpuVm);
+                    var gpuDetails = await InspectWithGuestAsync(runner, gpuVm);
+                    var gpuFolder = CreationPreflight.RequireOwnedOperationFolder(gpuVm, gpuDetails with { Checkpoints = [] });
+                    if (request.Kind == OperationKind.AddGpuPartition) GpuPartitionPolicy.RequireCanAdd(gpuVm, gpuDetails, request.GpuInstancePath);
+                    else GpuPartitionPolicy.RequireCanRemove(gpuVm, gpuDetails);
+                    var changed = Json.Read<OperationResult>(await runner.RunAsync("ManageVm", new
+                    {
+                        kind = request.Kind.ToString(), vmId = gpuVm.Id, gpuInstancePath = request.GpuInstancePath, operationFolder = gpuFolder,
+                        lowMmioBytes = GpuPartitionPolicy.LowMmioBytes, highMmioBytes = GpuPartitionPolicy.HighMmioBytes
+                    }));
+                    return changed.Details is null ? changed : changed with { Details = WithGuest(changed.Details, gpuVm) };
+                }
             case OperationKind.DeleteVm:
                 {
                     var target = (await new HyperVManager(runner).ListAsync()).SingleOrDefault(x => x.Id == request.VmId)
@@ -129,6 +146,11 @@ internal static class Program
                         return new(false, "Boot log export failed. Partial files were preserved. " + Redaction.Clean(e.Message), selected.Id, logsRoot, Stage: "NeedsAttention");
                     }
                 }
+                if (request.Kind == OperationKind.InspectVm)
+                {
+                    var inspectedVm = Json.Read<OperationResult>(await runner.RunAsync("ManageVm", request));
+                    return inspectedVm.Details is null ? inspectedVm : inspectedVm with { Details = WithGuest(inspectedVm.Details, selected) };
+                }
                 if (request.Kind != OperationKind.Export)
                     return Json.Read<OperationResult>(await runner.RunAsync("ManageVm", request));
                 var exportId = request.OperationId ?? Guid.NewGuid();
@@ -193,6 +215,7 @@ internal static class Program
                         await CopyVerified(efi, archive, UpstreamAssets.HyperVEfi.Sha256);
                         var identity = MachineIdentity.Create();
                         await WriteAtomicAsync(Path.Combine(root, "identity.json"), Json.Write(identity));
+                        await WriteAtomicAsync(Path.Combine(root, "guest.json"), Json.Write(new GuestRecord(1, release.Version, plan.CpuProfile, DateTimeOffset.UtcNow)));
                         var files = Path.Combine(root, "BootFiles");
                         string? driver = null;
                         if (needsDriver)
@@ -213,7 +236,11 @@ internal static class Program
                         await WriteMarkerAsync(root, plan.OperationId, "BuildingRecovery", "Restoring verified Apple recovery to a separate disk so it does not occupy guest boot memory.", false, null);
                         await RecoveryDisk.RestoreAsync(Path.Combine(recoveryFolder, "BaseSystem.dmg"), Path.Combine(root, "Recovery.vhd"));
                     }
-                    else await CopyVerified(efi, Path.Combine(root, "EFI.vhdx"), plan.EfiSha256);
+                    else
+                    {
+                        await CopyVerified(efi, Path.Combine(root, "EFI.vhdx"), plan.EfiSha256);
+                        await WriteAtomicAsync(Path.Combine(root, "guest.json"), Json.Write(new GuestRecord(1, release.Version, plan.CpuProfile, DateTimeOffset.UtcNow)));
+                    }
                     if (recovery is not null) await CopyVerified(recovery, Path.Combine(root, "Recovery.vhdx"), plan.RecoverySha256!);
                 }
                 catch (Exception e)
@@ -225,6 +252,15 @@ internal static class Program
                 return Json.Read<OperationResult>(await runner.RunAsync("CreateVm", new { plan, resourceDirectory = root }));
             default: throw new InvalidDataException("Operation is not allowed.");
         }
+    }
+
+    private static VmDetails WithGuest(VmDetails details, VmInfo vm) =>
+        details with { GuestMacOsVersion = CreationPreflight.TryReadGuestRecord(vm, details)?.MacOsVersion };
+
+    private static async Task<VmDetails> InspectWithGuestAsync(PowerShellRunner runner, VmInfo vm)
+    {
+        var inspected = Json.Read<OperationResult>(await runner.RunAsync("ManageVm", new OperationRequest(OperationKind.InspectVm, VmId: vm.Id)));
+        return WithGuest(inspected.Details ?? throw new InvalidDataException("VM details are unavailable."), vm);
     }
 
     private static async Task WriteMarkerAsync(string root, Guid operationId, string stage, string detail, bool terminal, Guid? vmId)

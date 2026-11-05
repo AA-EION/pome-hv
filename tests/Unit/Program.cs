@@ -532,6 +532,41 @@ Test("Multi-CPU boots stay disabled until a fixed driver is pinned", () => {
     var smp = OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel, limitToOneCpu: false);
     Check(PlistValue(smp, "boot-args") == "-v keepsyms=1", "A fixed driver must remove every cpus= limit");
 });
+
+// --- GPU partitioning (experimental, Tahoe only) ------------------------------------
+VmDetails GpuDetails(VmInfo vm, string? version, string[]? partitions = null, VmCheckpoint[]? checkpoints = null) =>
+    new(vm.Id, vm.Name, 2, 8UL << 30, null, "C:\\vm", "Off", [], checkpoints ?? [], [], partitions ?? [],
+        [new(@"\\?\PCI#VEN_10DE&DEV_28E0&SUBSYS_3D4317AA&REV_A1#4&2f1b5d7c&0&0008#{064092b3-625e-43bf-9eb5-dc845897dd59}", "NVIDIA GeForce RTX 4060 Laptop GPU")], version);
+Test("GPU partitions are limited to recorded Tahoe guests", () => {
+    var vm = Managed(); var gpu = GpuDetails(vm, "26").PartitionableGpus![0].InstancePath;
+    GpuPartitionPolicy.RequireCanAdd(vm, GpuDetails(vm, "26"), gpu);
+    Throws<InvalidDataException>(() => GpuPartitionPolicy.RequireCanAdd(vm, GpuDetails(vm, "15"), gpu));
+    Throws<InvalidDataException>(() => GpuPartitionPolicy.RequireCanAdd(vm, GpuDetails(vm, null), gpu));
+    Throws<InvalidDataException>(() => GpuPartitionPolicy.RequireCanAdd(vm with { Notes = "external" }, GpuDetails(vm, "26"), gpu));
+});
+Test("GPU partition attach rechecks checkpoints, duplicates and the host GPU list", () => {
+    var vm = Managed(); var gpu = GpuDetails(vm, "26").PartitionableGpus![0].InstancePath;
+    Throws<InvalidDataException>(() => GpuPartitionPolicy.RequireCanAdd(vm, GpuDetails(vm, "26", checkpoints: [new(Guid.NewGuid(), "c", DateTime.Now)]), gpu));
+    Throws<InvalidDataException>(() => GpuPartitionPolicy.RequireCanAdd(vm, GpuDetails(vm, "26", partitions: [gpu]), gpu));
+    Throws<InvalidDataException>(() => GpuPartitionPolicy.RequireCanAdd(vm, GpuDetails(vm, "26"), @"\\?\PCI#VEN_1002&DEV_73DF#x#{y}"));
+    Throws<InvalidDataException>(() => GpuPartitionPolicy.RequireCanRemove(vm, GpuDetails(vm, "26")));
+    GpuPartitionPolicy.RequireCanRemove(vm, GpuDetails(vm, "15", partitions: [gpu]));
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.AddGpuPartition, VmId: vm.Id), vm with { State = "Running" }));
+});
+Test("GPU instance paths map to display adapter PnP IDs", () =>
+    Check(GpuPartitionPolicy.PnpIdFromInstancePath(@"\\?\PCI#VEN_10DE&DEV_28E0&SUBSYS_3D4317AA&REV_A1#4&2f1b5d7c&0&0008#{064092b3-625e-43bf-9eb5-dc845897dd59}")
+        == @"PCI\VEN_10DE&DEV_28E0&SUBSYS_3D4317AA&REV_A1\4&2f1b5d7c&0&0008"));
+Test("Guest records are read only from the VM's own pome folder", () => {
+    var operation = Guid.NewGuid(); var vm = new VmInfo(Guid.NewGuid(), "Mac", "Off", 2, 0, 0, "pome:v1:" + operation);
+    var folder = Path.Combine(temp, "pome-" + operation.ToString("N")); Directory.CreateDirectory(folder);
+    var details = new VmDetails(vm.Id, "Mac", 2, 0, null, folder, "Off", [new(Path.Combine(folder, "macOS.vhdx"), 0, "SCSI 0:1")], [], []);
+    Check(CreationPreflight.TryReadGuestRecord(vm, details) is null, "Missing record must read as unknown");
+    File.WriteAllText(Path.Combine(folder, "guest.json"), Json.Write(new GuestRecord(1, "26", CpuProfile.CometLakeEmulation, DateTimeOffset.UtcNow)));
+    Check(CreationPreflight.TryReadGuestRecord(vm, details)?.MacOsVersion == "26");
+    Check(CreationPreflight.TryReadGuestRecord(vm with { Notes = "pome:v1:" + Guid.NewGuid() }, details) is null, "Another operation's folder was trusted");
+    File.WriteAllText(Path.Combine(folder, "guest.json"), "{\"schemaVersion\":1,\"macOsVersion\":\"99\"}");
+    Check(CreationPreflight.TryReadGuestRecord(vm, details) is null, "Unknown versions must not be trusted");
+});
 var amdArgument = Array.IndexOf(args, "--amd-patches");
 if (amdArgument >= 0 && amdArgument + 1 < args.Length)
 {
