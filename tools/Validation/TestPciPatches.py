@@ -13,7 +13,7 @@ subprocess.run(['python', str(root / 'tools/Validation/GeneratePciPatches.py')],
 work = root / 'artifacts' / ('pci-test-' + uuid.uuid4().hex)
 source = 'MacHyperVSupport/PCIBridge/HyperVPCIBridgePrivate.cpp'
 header = 'MacHyperVSupport/PCIBridge/HyperVPCIBridge.hpp'
-for name in [source, header, 'MacHyperVSupport/PCIBridge/HyperVPCIBridge.cpp', 'MacHyperVSupport/PCIRoot/HyperVPCIRoot.cpp']:
+for name in [source, header, 'MacHyperVSupport/PCIBridge/HyperVPCIBridge.cpp', 'MacHyperVSupport/PCIRoot/HyperVPCIRoot.cpp', 'MacHyperVSupport/Controller/HyperVControllerInterrupts.cpp']:
     dest = work / name
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(root / '.research/MacHyperVSupport' / name, dest)

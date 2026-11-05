@@ -1,4 +1,40 @@
-# Pome checkpoint — 2026-10-15 (Post-Audit Update)
+# Pome checkpoint — 2026-11-05
+
+Upstream review: ExHyperV was already at upstream `f51e066`. OSX-Hyper-V has no release after 0.4.0 (MacHyperVSupport 0.9.9 inside). MacHyperVSupport 1.0.0 (2026-09-27) carries the MacKernelSDK#25 IOPCIHostBridge layout fix that ends the Tahoe `HyperVGraphicsBridge` spinlock panic. Open upstream PR acidanthera/MacHyperVSupport#12 is the same SynIC EOM fix as patch `0005` and booted 8/12/16 vCPUs on Sequoia 15.8; #13–#15 (VMBus retry backoff, software cursor, network start failure) were tested on AMD Zen 5 with macOS 15/26. OpenCore is at 1.0.8.
+
+Implemented this session (not yet guest-tested):
+
+- **macOS version picker** (`src/Core/MacOsCatalog.cs`): OS X 10.7 through macOS 26 with per-version Apple recovery board/MLB (OpenCore `recovery_urls.txt`), per-version SMBIOS (iMac20,1 for 11+, iMac19,1/18,3/17,1/14,2/12,2 for older), per-version recovery cache, legacy booter quirks for 10.7, `-os latest` for Sequoia/Tahoe. Tahoe replaces the EFI's MacHyperVSupport kexts and guest Tools with the pinned 1.0.0 release (SHA-256 from GitHub release metadata).
+- **CPU profiles** (`CpuCompatibility`): Sandy Bridge–Arrow Lake/Lunar Lake/Sapphire Rapids; Comet Lake, Haswell or Ivy Bridge CPUID chosen per host and release; AVX2 required for Ventura+; Sandy/Ivy capped at Monterey. AMD still fails closed.
+- **Power**: Turn off and Reset; Shut down checks the guest shutdown integration service and explains Turn off instead of hanging.
+- **Removal**: Remove VM (keep files by default; typed-name confirmation to delete only the VM's own verified `pome-…` folder, no checkpoints, no reparse points). Open VM folder.
+- **Fewer UAC prompts**: optional one-time Join Hyper-V Administrators; members run power actions and VMConnect unelevated. Auto-refresh polling while guests run or after actions.
+- **Guest tools**: `Scripts/` and `Tools/` from the upstream archive now go onto POME-BOOT, with an Install macOS step for `post-install.sh` (shutdown/time-sync/file-copy daemons, framebuffer resolutions).
+- **Fixes**: EFI volume mounted to a private folder (no drive letter), 2-vCPU recommendation plus power-of-two hint, OneDrive-safe default storage, consistent "Start & connect", 4 GB minimum in compatibility data, validation folders cleaned after preparation.
+
+Validation: Release build 0 warnings/0 errors; 109/109 C# tests, 16 management/initialization, 14 diagnostics and 3 creation-script scenarios. New wizard and This computer screens inspected natively. No VM was created, started or changed. Not yet validated: any guest other than Sequoia, the Tahoe driver swap against the real 1.0.0 archive, removal and Hyper-V Administrators flows on a real host.
+
+Follow-up the same day:
+
+- **Real media validation** for 26, 15, 12, 10.15, 10.13, 10.11, 10.10, 10.8 and 10.7 passed (see TESTING.md). Fixed along the way: automatic re-download of interrupted or rejected Apple recoveries, Apple Partition Map (2 KB block) recoveries for 10.7–10.10, and Tahoe-compressed files in `InspectRecovery.py`.
+- **AMD profile**: families 15h–1Ah, macOS 10.13+, with commit-pinned AMD_Vanilla patches (runtime download), the VM's core count, DummyPowerManagement and the Hyper-V `wrmsr` patch. AMD VMs need power-of-two processor counts and cannot change them after creation.
+- **Multi-CPU driver**: `.github/workflows/build-machypervsupport.yml` and `docs/MULTI_CPU_DRIVER.md`; `GuestDriverPolicy.PinnedDriverFixesSmp` drops `cpus=1` once a pinned build passes the boot gate.
+
+Remaining gates, all needing hardware or a push: run the driver workflow on GitHub (requires pushing it), then pin and boot-test the output; guest installs from the TESTING.md checklist (needs about 6 GB free RAM); an AMD host test; OpenCore 1.0.8 integration pin.
+
+# Pome checkpoint — 2026-10-28
+
+The rebuilt application is at `artifacts/app/Pome.UI.exe`. The ExHyperV-inspired library, four-step wizard, lifecycle/settings/storage/recovery workflows and Diagnostics tab are assembled there with the matching helper and bundled Python.
+
+Automatic creation now restores Apple recovery into a separate GPT/HFS+ disk, converts it to VHDX before VM registration and attaches EFI, destination and recovery as SCSI 0:0, 0:1 and 0:2. This integrates the repair that cleared the 4 GiB RAM-disk allocation failure. New OpenCore configurations disable DMG loading and enable file/panic logs. The managed decoder's entire real recovery payload matches the boot-tested Python restore; Windows' read-only virtual-disk parser accepts it.
+
+The user-approved Sequoia VM reached Recovery and active installation with 4 GiB, then the user shut it down. The app work performed no further VM start, stop, mount or mutation. Installation completion, first normal boot and multi-CPU operation remain unverified. The provisional `cpus=1` mode remains; the source-level SynIC patch has not been built into a guest kext.
+
+Release build: 88/88 default C# tests, 90/90 including real pinned EFI/recovery, plus 13 management/initialization, 14 diagnostics/repair/export and 3 creation-workflow scenarios. Native Library and creation/media/review screens inspected. Console elevation now leaves the UI responsive and supplies the owner HWND. The wizard checks name/folder/resource values before advancing; VM boot logs can be exported locally from an off, owned VM without checkpoints.
+
+Remaining engineering gates: a fresh end-to-end automatic creation/export test on a disposable VM; complete macOS installation and normal boot; a rebuilt multi-CPU guest driver; safe import/cloning/adoption and identity handling; additional media management; release signing, publisher pinning and handle-based path-race hardening. Full ExHyperV feature parity and GPU acceleration are not claimed. See `docs/EXHYPERV_PORT_AUDIT.md`, `TESTING.md` and `docs/BOOT_COMPATIBILITY_2026-10-28.md`.
+
+# Historical checkpoint — 2026-10-15 (Post-Audit Update)
 
 This checkpoint reflects the full codebase audit and completion of all software-testable pending items. It remains an engineering preview, not a boot-validated release.
 

@@ -23,7 +23,7 @@ internal static class Program
             try
             {
                 result = await Execute(request);
-                if (result.Success && request.Kind is OperationKind.Create or OperationKind.Start or OperationKind.Shutdown)
+                if (result.Success && request.Kind is not (OperationKind.Inspect or OperationKind.EnableHyperV or OperationKind.GrantHyperVAccess))
                 {
                     try { result = result with { VirtualMachines = (await new HyperVManager(new PowerShellRunner()).ListAsync()).ToArray() }; }
                     catch { /* The operation succeeded; a listing failure must not turn it into a retry. */ }
@@ -50,18 +50,121 @@ internal static class Program
                 }
             case OperationKind.EnableHyperV:
                 return Json.Read<OperationResult>(await runner.RunAsync("EnableHyperV"));
+            case OperationKind.GrantHyperVAccess:
+                // The pipe owner check guarantees this helper runs as the requesting user; never take a SID from the request.
+                using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
+                    return Json.Read<OperationResult>(await runner.RunAsync("GrantHyperVAccess", new { userSid = identity.User?.Value ?? throw new InvalidDataException("The signed-in user could not be identified.") }));
+            case OperationKind.DeleteVm:
+                {
+                    var target = (await new HyperVManager(runner).ListAsync()).SingleOrDefault(x => x.Id == request.VmId)
+                        ?? throw new InvalidDataException("The selected VM no longer exists.");
+                    VmManagementPolicy.RequireAllowed(request, target);
+                    var inspected = Json.Read<OperationResult>(await runner.RunAsync("ManageVm", new OperationRequest(OperationKind.InspectVm, VmId: target.Id)));
+                    var folder = CreationPreflight.RequireOwnedOperationFolder(target, inspected.Details ?? throw new InvalidDataException("VM details are unavailable."));
+                    var removed = Json.Read<OperationResult>(await runner.RunAsync("ManageVm", new { kind = "DeleteVm", vmId = target.Id, operationFolder = folder }));
+                    if (!request.DeleteFiles)
+                        return removed with { Message = $"{target.Name} was removed from Hyper-V. Its files were kept in {folder}.", ResourceDirectory = folder };
+                    try
+                    {
+                        // Directory.Delete removes links rather than following them; the folder was also checked for none.
+                        Directory.Delete(folder, true);
+                        return removed with { Message = $"{target.Name} and its files were deleted.", ResourceDirectory = null };
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        return removed with { Message = $"{target.Name} was removed from Hyper-V, but some files could not be deleted: {Redaction.Clean(e.Message)} The remaining files are in {folder}.", ResourceDirectory = folder };
+                    }
+                }
             case OperationKind.Start:
             case OperationKind.Shutdown:
+            case OperationKind.Pause:
+            case OperationKind.Resume:
+            case OperationKind.Save:
+            case OperationKind.TurnOff:
+            case OperationKind.Reset:
                 if (request.VmId is null || request.VmId == Guid.Empty) throw new InvalidDataException("A VM identifier is required.");
+                var lifecycleVm = (await new HyperVManager(runner).ListAsync()).SingleOrDefault(x => x.Id == request.VmId)
+                    ?? throw new InvalidDataException("The selected VM no longer exists.");
+                VmManagementPolicy.RequireAllowed(request, lifecycleVm);
                 return Json.Read<OperationResult>(await runner.RunAsync("Lifecycle", request));
+            case OperationKind.InspectVm:
+            case OperationKind.Configure:
+            case OperationKind.RepairBoot:
+            case OperationKind.Checkpoint:
+            case OperationKind.RestoreCheckpoint:
+            case OperationKind.DeleteCheckpoint:
+            case OperationKind.Export:
+            case OperationKind.ResizeDisk:
+            case OperationKind.ExportBootLogs:
+                var selected = (await new HyperVManager(runner).ListAsync()).SingleOrDefault(x => x.Id == request.VmId)
+                    ?? throw new InvalidDataException("The selected VM no longer exists.");
+                var currentHost = request.Kind == OperationKind.Configure ? await new WindowsHostDiscovery(runner).DiscoverAsync() : null;
+                VmManagementPolicy.RequireAllowed(request, selected, currentHost);
+                if (request.Kind == OperationKind.Configure)
+                    CreationPreflight.RequireUniqueName(request.Configuration!.Name, (await new HyperVManager(runner).ListAsync()).Where(x => x.Id != selected.Id));
+                if (request.Kind == OperationKind.ResizeDisk)
+                {
+                    var inspectedDisk = Json.Read<OperationResult>(await runner.RunAsync("ManageVm", new OperationRequest(OperationKind.InspectVm, VmId: selected.Id)));
+                    var systemDisk = CreationPreflight.RequireOwnedSystemDisk(selected, inspectedDisk.Details!);
+                    var required = checked((long)request.DiskGiB!.Value * (long)ResourcePolicy.GiB - new FileInfo(systemDisk).Length);
+                    if (new DriveInfo(Path.GetPathRoot(systemDisk)!).AvailableFreeSpace < required)
+                        throw new IOException("The disk's drive needs room for the full expanded capacity. Free space before retrying.");
+                    return Json.Read<OperationResult>(await runner.RunAsync("ManageVm", new { kind = "ResizeDisk", vmId = selected.Id, diskGiB = request.DiskGiB, systemDisk }));
+                }
+                if (request.Kind == OperationKind.ExportBootLogs)
+                {
+                    var logsId = request.OperationId ?? Guid.NewGuid();
+                    var logsRoot = SafePaths.NewOperationDirectory(request.Destination ?? "", logsId);
+                    Directory.CreateDirectory(logsRoot);
+                    await WriteMarkerAsync(logsRoot, logsId, "CollectingBootLogs", "Reading the stopped guest EFI disk without changing it.", false, selected.Id);
+                    try
+                    {
+                        var logs = Json.Read<OperationResult>(await runner.RunAsync("CollectBootLogs", new { vmId = selected.Id, outputDirectory = logsRoot }));
+                        await WriteMarkerAsync(logsRoot, logsId, "Exported", logs.Message, true, selected.Id);
+                        return logs;
+                    }
+                    catch (Exception e)
+                    {
+                        await WriteMarkerAsync(logsRoot, logsId, "NeedsAttention", e.Message, false, selected.Id);
+                        return new(false, "Boot log export failed. Partial files were preserved. " + Redaction.Clean(e.Message), selected.Id, logsRoot, Stage: "NeedsAttention");
+                    }
+                }
+                if (request.Kind != OperationKind.Export)
+                    return Json.Read<OperationResult>(await runner.RunAsync("ManageVm", request));
+                var exportId = request.OperationId ?? Guid.NewGuid();
+                var exportRoot = SafePaths.NewOperationDirectory(request.Destination ?? "", exportId);
+                // Use allocated disk sizes for the preflight; Hyper-V may need additional
+                // temporary space, so a later export failure preserves partial files.
+                var detailResult = Json.Read<OperationResult>(await runner.RunAsync("ManageVm", new OperationRequest(OperationKind.InspectVm, VmId: selected.Id)));
+                var diskBytes = detailResult.Details!.Disks.Aggregate(0L, (sum, disk) => checked(sum + new FileInfo(SafePaths.RequireLocal(disk.Path)).Length));
+                if (new DriveInfo(Path.GetPathRoot(exportRoot)!).AvailableFreeSpace < checked(diskBytes + (long)ResourcePolicy.GiB))
+                    throw new IOException("The backup drive needs space for the VM disks plus at least 1 GB of overhead.");
+                Directory.CreateDirectory(exportRoot);
+                await WriteMarkerAsync(exportRoot, exportId, "Exporting", "Exporting VM configuration and disks.", false, selected.Id);
+                try
+                {
+                    var exported = Json.Read<OperationResult>(await runner.RunAsync("ManageVm", new { kind = "Export", vmId = selected.Id, exportDirectory = exportRoot }));
+                    await WriteMarkerAsync(exportRoot, exportId, "Exported", exported.Message, true, selected.Id);
+                    return exported with { Stage = "Exported", ResourceDirectory = exportRoot };
+                }
+                catch (Exception e)
+                {
+                    await WriteMarkerAsync(exportRoot, exportId, "NeedsAttention", e.Message, false, selected.Id);
+                    return new(false, "Export failed. Partial files were preserved. " + Redaction.Clean(e.Message), selected.Id, exportRoot, Stage: "NeedsAttention");
+                }
             case OperationKind.Create:
                 var plan = request.Plan ?? throw new InvalidDataException("Missing creation plan.");
                 var host = await new WindowsHostDiscovery(runner).DiscoverAsync();
                 PlanValidator.RequireValid(plan, host, preparing: true);
+                CreationPreflight.RequireUniqueName(plan.Name, await new HyperVManager(runner).ListAsync());
                 var root = SafePaths.NewOperationDirectory(plan.StorageRoot, plan.OperationId);
                 var efi = SafePaths.RequireLocal(plan.EfiSource);
                 if (!plan.BuildEfiFromArchive && !efi.EndsWith(".vhdx", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("EFI must be a VHDX file.");
                 if (plan.BuildEfiFromArchive && !plan.EfiSha256.Equals(UpstreamAssets.HyperVEfi.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Only the pinned upstream EFI archive is accepted for automatic preparation.");
+                var release = MacOsCatalog.Require(plan.MacOsVersion);
+                var needsDriver = plan.BuildEfiFromArchive && GuestDriverPolicy.UsesUpdatedDriver(release);
+                if (needsDriver && !string.Equals(plan.HyperVDriverSha256, UpstreamAssets.MacHyperVSupport.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Only the pinned MacHyperVSupport release is accepted for automatic preparation.");
                 var sourceBytes = new FileInfo(efi).Length;
                 string? recovery = null;
                 if (!string.IsNullOrWhiteSpace(plan.RecoverySource))
@@ -73,11 +176,13 @@ internal static class Program
                 if (plan.BuildEfiFromArchive)
                 {
                     SafePaths.RequireLocal(plan.RecoveryDmg!); SafePaths.RequireLocal(plan.RecoveryChunklist!);
-                    if (new FileInfo(plan.RecoveryDmg!).Length >= uint.MaxValue) throw new InvalidDataException("The recovery image exceeds the FAT32 per-file limit.");
-                    sourceBytes = checked(sourceBytes + 2 * new FileInfo(plan.RecoveryDmg!).Length + 512L * 1024 * 1024);
+                    sourceBytes = checked(sourceBytes + 2 * new FileInfo(plan.RecoveryDmg!).Length
+                        + 2 * RecoveryDisk.GetVirtualSize(plan.RecoveryDmg!) + 512L * 1024 * 1024);
+                    if (needsDriver) sourceBytes = checked(sourceBytes + 2 * new FileInfo(SafePaths.RequireLocal(plan.HyperVDriverArchive!)).Length);
+                    if (plan.CpuProfile == CpuProfile.AmdVanilla && !string.Equals(plan.AmdPatchesSha256, UpstreamAssets.AmdVanillaPatches.Sha256, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("Only the pinned AMD_Vanilla patches are accepted for automatic preparation.");
                 }
-                if (new DriveInfo(Path.GetPathRoot(root)!).AvailableFreeSpace < sourceBytes + (long)plan.DiskGiB * (long)ResourcePolicy.GiB)
-                    throw new IOException("The storage volume needs room for the full virtual disk capacity and copied boot media.");
+                CreationPreflight.RequireStorage(plan, sourceBytes);
                 Directory.CreateDirectory(root);
                 await WriteMarkerAsync(root, plan.OperationId, "CopyingMedia", "Validating and copying verified boot media into the new operation directory.", false, null);
                 try
@@ -89,10 +194,24 @@ internal static class Program
                         var identity = MachineIdentity.Create();
                         await WriteAtomicAsync(Path.Combine(root, "identity.json"), Json.Write(identity));
                         var files = Path.Combine(root, "BootFiles");
-                        await BootMedia.ConfigureAsync(archive, files, plan.CpuProfile, identity);
-                        var recoveryFolder = Path.Combine(files, "com.apple.recovery.boot"); Directory.CreateDirectory(recoveryFolder);
+                        string? driver = null;
+                        if (needsDriver)
+                        {
+                            driver = Path.Combine(root, "MacHyperVSupport.zip");
+                            await CopyVerified(SafePaths.RequireLocal(plan.HyperVDriverArchive!), driver, UpstreamAssets.MacHyperVSupport.Sha256);
+                        }
+                        string? amdPatches = null;
+                        if (plan.CpuProfile == CpuProfile.AmdVanilla)
+                        {
+                            amdPatches = Path.Combine(root, "AMD_Vanilla-patches.plist");
+                            await CopyVerified(SafePaths.RequireLocal(plan.AmdPatches!), amdPatches, UpstreamAssets.AmdVanillaPatches.Sha256);
+                        }
+                        await BootMedia.ConfigureAsync(archive, files, plan.CpuProfile, identity, default, release, driver, amdPatches, plan.CpuCount);
+                        var recoveryFolder = Path.Combine(root, "RecoverySource"); Directory.CreateDirectory(recoveryFolder);
                         await CopyVerified(plan.RecoveryDmg!, Path.Combine(recoveryFolder, "BaseSystem.dmg"), plan.RecoveryDmgSha256!);
                         await CopyVerified(plan.RecoveryChunklist!, Path.Combine(recoveryFolder, "BaseSystem.chunklist"), plan.RecoveryChunklistSha256!);
+                        await WriteMarkerAsync(root, plan.OperationId, "BuildingRecovery", "Restoring verified Apple recovery to a separate disk so it does not occupy guest boot memory.", false, null);
+                        await RecoveryDisk.RestoreAsync(Path.Combine(recoveryFolder, "BaseSystem.dmg"), Path.Combine(root, "Recovery.vhd"));
                     }
                     else await CopyVerified(efi, Path.Combine(root, "EFI.vhdx"), plan.EfiSha256);
                     if (recovery is not null) await CopyVerified(recovery, Path.Combine(root, "Recovery.vhdx"), plan.RecoverySha256!);

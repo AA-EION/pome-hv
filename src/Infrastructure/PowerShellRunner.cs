@@ -9,7 +9,7 @@ public sealed class PowerShellRunner
 {
     public async Task<string> RunAsync(string script, object? data = null, CancellationToken cancellationToken = default)
     {
-        if (script is not ("Discover" or "ListVms" or "CreateVm" or "Lifecycle" or "EnableHyperV")) throw new ArgumentException("Unknown operation.");
+        if (script is not ("Discover" or "ListVms" or "CreateVm" or "Lifecycle" or "EnableHyperV" or "ManageVm" or "CollectBootLogs" or "GrantHyperVAccess")) throw new ArgumentException("Unknown operation.");
         using var resource = typeof(PowerShellRunner).Assembly.GetManifestResourceStream($"Pome.Infrastructure.Scripts.{script}.ps1")
             ?? throw new InvalidOperationException("Missing embedded program.");
         using var reader = new StreamReader(resource);

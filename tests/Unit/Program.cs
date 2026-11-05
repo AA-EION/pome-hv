@@ -17,6 +17,151 @@ HostInfo Host(ulong total = 16, ulong free = 12, bool server = false) => new("Te
 CreatePlan Plan() => new(1, Guid.NewGuid(), "Test VM", Path.GetTempPath(), 4, 8, 100, "Default Switch", "C:\\media\\EFI.vhdx", new('a', 64), null, null, "15", true, true);
 var temp = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "tests", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(temp);
 
+AsyncTest("Recovery restoration preserves every decoded sector and emits a valid fixed VHD footer", async () => {
+    foreach (var kind in new[] { 1u, 0x80000005u }) {
+        var source = Path.Combine(temp, $"recovery-{kind}.dmg"); var output = source + ".vhd";
+        var raw = RecoveryFixtures.Write(source, compression: kind);
+        Check(RecoveryDisk.GetVirtualSize(source) == raw.Length);
+        await RecoveryDisk.RestoreAsync(source, output);
+        var restored = await File.ReadAllBytesAsync(output);
+        Check(restored.Length == raw.Length + 512 && restored.AsSpan(0, raw.Length).SequenceEqual(raw));
+        var footer = restored.AsSpan(raw.Length).ToArray();
+        Check(Encoding.ASCII.GetString(footer, 0, 8) == "conectix");
+        Check(System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(footer.AsSpan(48)) == (ulong)raw.Length);
+        Check(System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(footer.AsSpan(60)) == 2);
+        var expected = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(footer.AsSpan(64)); footer.AsSpan(64, 4).Clear();
+        Check(expected == ~footer.Aggregate(0u, (sum, b) => sum + b));
+        await Reject<IOException>(() => RecoveryDisk.RestoreAsync(source, output));
+        Check((await File.ReadAllBytesAsync(output)).AsSpan().SequenceEqual(restored));
+    }
+});
+AsyncTest("Recovery restoration accepts Apple Partition Map images with 512- and 2048-byte blocks", async () => {
+    foreach (var block in new[] { 512, 2048 }) {
+        var source = Path.Combine(temp, $"apm-{block}.dmg"); var output = source + ".vhd";
+        var raw = RecoveryFixtures.Write(source, apmBlock: block);
+        await RecoveryDisk.RestoreAsync(source, output);
+        Check((await File.ReadAllBytesAsync(output)).AsSpan(0, raw.Length).SequenceEqual(raw), $"APM {block} sectors changed");
+    }
+    var broken = Path.Combine(temp, "apm-bad.dmg"); RecoveryFixtures.Write(broken, apmBlock: 2048, badApm: true);
+    await Reject<InvalidDataException>(() => RecoveryDisk.RestoreAsync(broken, broken + ".vhd"));
+});
+AsyncTest("Recovery restoration rejects corrupt GPT, unsupported compression and incomplete sector maps", async () => {
+    foreach (var variant in new[] { "gpt", "gap", "codec" }) {
+        var source = Path.Combine(temp, variant + ".dmg");
+        RecoveryFixtures.Write(source, badGpt: variant == "gpt", gap: variant == "gap", compression: variant == "codec" ? 0x80000006u : 0x80000005u);
+        await Reject<InvalidDataException>(() => RecoveryDisk.RestoreAsync(source, source + ".vhd"));
+        Check(!File.Exists(source + ".vhd"));
+    }
+});
+AsyncTest("Recovery cancellation cannot publish a disk or overwrite a prior partial", async () => {
+    var source = Path.Combine(temp, "cancel-recovery.dmg"); RecoveryFixtures.Write(source);
+    var output = source + ".vhd";
+    using var cancel = new CancellationTokenSource(); cancel.Cancel();
+    await Reject<OperationCanceledException>(() => RecoveryDisk.RestoreAsync(source, output, cancel.Token));
+    Check(!File.Exists(output));
+    await Reject<IOException>(() => RecoveryDisk.RestoreAsync(source, output));
+});
+Test("Automatic plans cannot ambiguously attach both restored and custom recovery media", () => {
+    var plan = Plan() with { BuildEfiFromArchive = true, RecoverySource = "C:\\extra.vhdx", RecoverySha256 = new('a', 64) };
+    Check(PlanValidator.Validate(plan).Any(x => x.Contains("own recovery disk")));
+});
+
+VmInfo Managed(string state = "Off") => new(Guid.NewGuid(), "Sequoia", state, 4, 0, 0, "pome:v1:" + Guid.NewGuid());
+Test("Discovery preserves edits and a deliberately disconnected network", () => {
+    var draft = new CreationDraft(); draft.ApplyHost(Host());
+    draft.CpuCount = 3; draft.MemoryGiB = 5; draft.Network = "Disconnected";
+    draft.ApplyHost(Host(free: 6));
+    Check(draft.CpuCount == 3 && draft.MemoryGiB == 5 && draft.Network == "Disconnected");
+});
+Test("Untouched defaults follow host evidence and recommendations are explicit", () => {
+    var draft = new CreationDraft(); draft.ApplyHost(Host());
+    Check(draft.Network == "Default Switch" && draft.MemoryGiB == 8);
+    draft.MemoryGiB = 4; draft.ApplyHost(Host(free: 7), useRecommendations: true);
+    Check(draft.MemoryGiB == 5);
+});
+Test("Default names avoid case insensitive collisions without renaming edited drafts", () => {
+    var draft = new CreationDraft();
+    draft.ApplyMachines([Managed() with { Name = "sequoia" }, Managed() with { Name = "Sequoia 2" }]);
+    Check(draft.Name == "Sequoia 3");
+    draft.Name = "My Mac"; draft.ApplyMachines([Managed() with { Name = "My Mac" }]);
+    Check(draft.Name == "My Mac");
+});
+Test("Blank and fractional number box values cannot become disk allocations", () => {
+    foreach (var value in new[] { double.NaN, double.PositiveInfinity, 4.5, -1, (double)int.MaxValue + 1 })
+        Throws<InvalidDataException>(() => CreationDraft.WholeNumber(value, "disk"));
+    Check(CreationDraft.WholeNumber(100, "disk") == 100);
+});
+Test("Name preflight treats wildcard characters literally and rejects duplicate case", () => {
+    Throws<InvalidDataException>(() => CreationPreflight.RequireUniqueName("SEQUOIA", [Managed()]));
+    CreationPreflight.RequireUniqueName("Other", [Managed()]);
+});
+Test("Storage estimate reserves full disk capacity and checks arithmetic overflow", () => {
+    Check(CreationPreflight.RequiredStorageBytes(100, 8L * (long)ResourcePolicy.GiB) == 108L * (long)ResourcePolicy.GiB);
+    Throws<OverflowException>(() => CreationPreflight.RequiredStorageBytes(100, long.MaxValue));
+});
+Test("Manual preflight rejects non-VHDX inputs and missing files", () => {
+    var text = Path.Combine(temp, "not-a-disk.txt"); File.WriteAllText(text, "fixture");
+    Throws<InvalidDataException>(() => CreationPreflight.RequireMedia(Plan() with { EfiSource = text }));
+    Throws<FileNotFoundException>(() => CreationPreflight.RequireMedia(Plan() with { EfiSource = Path.Combine(temp, "absent.vhdx") }));
+});
+Test("External VMs remain read-only across every management action", () => {
+    var vm = Managed() with { Notes = "external" };
+    VmManagementPolicy.RequireAllowed(new(OperationKind.InspectVm, VmId: vm.Id), vm);
+    foreach (var kind in new[] { OperationKind.Start, OperationKind.Configure, OperationKind.Checkpoint, OperationKind.RestoreCheckpoint, OperationKind.DeleteCheckpoint, OperationKind.RepairBoot, OperationKind.Export, OperationKind.ResizeDisk, OperationKind.ExportBootLogs, OperationKind.Pause, OperationKind.Resume, OperationKind.Save, OperationKind.Shutdown })
+        Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(kind, VmId: vm.Id), vm, Host()));
+});
+Test("Settings, checkpoints and export cannot mutate running, paused or saved VMs", () => {
+    foreach (var state in new[] { "Running", "Paused", "Saved", "Starting", "Stopping" }) {
+        var vm = Managed(state);
+        foreach (var kind in new[] { OperationKind.Configure, OperationKind.Checkpoint, OperationKind.RestoreCheckpoint, OperationKind.DeleteCheckpoint, OperationKind.RepairBoot, OperationKind.Export, OperationKind.ResizeDisk, OperationKind.ExportBootLogs })
+            Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(kind, VmId: vm.Id), vm, Host()));
+    }
+});
+Test("Saved VMs may start; paused VMs resume without a second start", () => {
+    var saved = Managed("Saved"); VmManagementPolicy.RequireAllowed(new(OperationKind.Start, VmId: saved.Id), saved);
+    var paused = Managed("Paused"); VmManagementPolicy.RequireAllowed(new(OperationKind.Resume, VmId: paused.Id), paused);
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.Start, VmId: paused.Id), paused));
+    var running = Managed("Running"); VmManagementPolicy.RequireAllowed(new(OperationKind.Save, VmId: running.Id), running);
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.Resume, VmId: running.Id), running));
+});
+Test("Configuration validates host budget, switch, name and VM identity", () => {
+    var vm = Managed(); var settings = new VmConfiguration("My Mac", 4, 8, "Default Switch");
+    var request = new OperationRequest(OperationKind.Configure, VmId: vm.Id, Configuration: settings);
+    VmManagementPolicy.RequireAllowed(request, vm, Host(free: 4)); // powered off; start rechecks live RAM
+    foreach (var bad in new[] { settings with { Name = "x'; Stop-VM *" }, settings with { CpuCount = 64 }, settings with { MemoryGiB = 128 }, settings with { SwitchName = "Gone" } })
+        Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(request with { Configuration = bad }, vm, Host()));
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(request with { VmId = Guid.NewGuid() }, vm, Host()));
+});
+Test("Checkpoint restore requires an explicit checkpoint identifier", () => {
+    var vm = Managed();
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.RestoreCheckpoint, VmId: vm.Id), vm));
+    VmManagementPolicy.RequireAllowed(new(OperationKind.RestoreCheckpoint, VmId: vm.Id, CheckpointId: Guid.NewGuid()), vm);
+});
+Test("Management settings and details survive bounded IPC JSON", () => {
+    var vm = Managed(); var config = new VmConfiguration("Mac", 4, 8, null);
+    var request = new OperationRequest(OperationKind.Configure, VmId: vm.Id, Configuration: config);
+    Check(Json.Read<OperationRequest>(Json.Write(request)).Configuration == config);
+    var details = new VmDetails(vm.Id, vm.Name, 4, 8 * ResourcePolicy.GiB, null, "C:\\VMs", "Off", [], [new(Guid.NewGuid(), "Before install", DateTime.Now)], ["EFI"]);
+    var result = Json.Read<OperationResult>(Json.Write(new OperationResult(true, "Loaded", Details: details)));
+    Check(result.Details?.Checkpoints.Single().Name == "Before install" && result.Details.BootOrder.Single() == "EFI");
+});
+Test("Disk growth is limited to the original pome operation disk", () => {
+    var operation = Guid.NewGuid(); var vm = Managed() with { Notes = "pome:v1:" + operation };
+    var folder = Path.Combine(temp, "pome-" + operation.ToString("N")); Directory.CreateDirectory(folder);
+    var path = Path.Combine(folder, "macOS.vhdx"); File.WriteAllText(path, "fixture");
+    var details = new VmDetails(vm.Id, vm.Name, 4, 8 * ResourcePolicy.GiB, null, folder, "Off", [new(path, 100 * ResourcePolicy.GiB, "SCSI 0:1")], [], []);
+    Check(CreationPreflight.RequireOwnedSystemDisk(vm, details) == path);
+    Throws<InvalidDataException>(() => CreationPreflight.RequireOwnedSystemDisk(vm with { Notes = "pome:v1:" + Guid.NewGuid() }, details));
+    Throws<InvalidDataException>(() => CreationPreflight.RequireOwnedSystemDisk(vm, details with { Disks = [new(path, 100, "SCSI 0:0")] }));
+    Throws<InvalidDataException>(() => CreationPreflight.RequireOwnedSystemDisk(vm, details with { VmId = Guid.NewGuid() }));
+});
+Test("Disk growth rejects absent, small and excessive capacities", () => {
+    var vm = Managed();
+    foreach (var size in new int?[] { null, 0, 63, 2049 })
+        Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.ResizeDisk, VmId: vm.Id, DiskGiB: size), vm));
+    VmManagementPolicy.RequireAllowed(new(OperationKind.ResizeDisk, VmId: vm.Id, DiskGiB: 200), vm);
+});
+
 Test("Running VMMS confirms enabled despite management access denial", () => {
     var host = Host() with { HyperVAvailable = false, HyperV = new(null, true, "Running", "Access denied") };
     Check(HostCompatibility.HyperVEnabled(host));
@@ -100,7 +245,7 @@ Test("Two processors are reserved", () => Check(ResourcePolicy.Recommend(Host())
 Test("Valid plan passes", () => Check(PlanValidator.Validate(Plan(), Host()).Count == 0));
 Test("Shell syntax in VM name rejected", () => Check(PlanValidator.Validate(Plan() with { Name = "a'; Stop-VM *" }).Count > 0));
 Test("Consent is enforced in backend", () => Check(PlanValidator.Validate(Plan() with { AcceptGuestFirmwareChange = false }).Count > 0));
-Test("Unverified Tahoe profile rejected", () => Check(PlanValidator.Validate(Plan() with { MacOsVersion = "26" }).Count > 0));
+Test("Unknown macOS profile rejected", () => Check(PlanValidator.Validate(Plan() with { MacOsVersion = "16" }).Count > 0));
 Test("Stale virtual switch rejected", () => Check(PlanValidator.Validate(Plan() with { SwitchName = "missing" }, Host()).Count > 0));
 Test("Allocation rechecked against free memory", () => Check(PlanValidator.Validate(Plan(), Host(free: 6)).Count > 0));
 Test("Client DDA restricted even with GPU", () => Check(GpuSafety.Evaluate(Host(), new("GPU", "PCI", "1", "PCIROOT", false)).Status == CapabilityStatus.HostOsRestricted));
@@ -179,17 +324,247 @@ Test("Safe zip preserves directory structure", () => { var path = Path.Combine(t
 Test("Unsupported AMD auto-profile fails closed", () => Throws<NotSupportedException>(() => BootMedia.DetectIntelProfile("AuthenticAMD")));
 Test("Automatic media requires verified recovery", () => Check(PlanValidator.Validate(Plan() with { BuildEfiFromArchive = true }).Count > 0));
 var plist = "<plist><dict><key>Kernel</key><dict><key>Add</key><array><dict><key>BundlePath</key><string>MacHyperVSupport.kext</string></dict></array><key>Quirks</key><dict><key>ProvideCurrentCpuInfo</key><false/></dict><key>Emulate</key><dict><key>Cpuid1Data</key><data/><key>Cpuid1Mask</key><data/></dict></dict><key>PlatformInfo</key><dict><key>Generic</key><dict><key>SystemProductName</key><string>old</string><key>SystemUUID</key><string/><key>SystemSerialNumber</key><string/><key>MLB</key><string/><key>ROM</key><data/></dict></dict></dict></plist>";
+plist = plist.Replace("<key>PlatformInfo</key>", "<key>NVRAM</key><dict><key>Add</key><dict><key>7C436110-AB2A-4BBB-A880-FE41995C9F82</key><dict><key>boot-args</key><string>-v keepsyms=1 cpus=8 cpus=2</string></dict></dict></dict><key>PlatformInfo</key>");
+plist = plist.Replace("<key>PlatformInfo</key>", "<key>Misc</key><dict><key>Security</key><dict><key>DmgLoading</key><string>Signed</string></dict><key>Debug</key><dict><key>AppleDebug</key><false/><key>ApplePanic</key><false/><key>Target</key><integer>3</integer></dict></dict><key>PlatformInfo</key>");
+Test("OpenCore compatibility boot preserves flags and replaces conflicting CPU limits", () => {
+    using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist));
+    var doc = OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel);
+    var bootArgs = doc.Descendants("key").Single(x => x.Value == "boot-args").ElementsAfterSelf().First().Value;
+    Check(bootArgs == "-v keepsyms=1 cpus=1");
+    Check(doc.Descendants("key").Single(x => x.Value == "DmgLoading").ElementsAfterSelf().First().Value == "Disabled");
+    Check(doc.Descendants("key").Single(x => x.Value == "AppleDebug").ElementsAfterSelf().First().Name == "true");
+    Check(doc.Descendants("key").Single(x => x.Value == "Target").ElementsAfterSelf().First().Value == "67");
+    using var again = new MemoryStream(Encoding.UTF8.GetBytes(doc.ToString()));
+    Check(OpenCoreConfiguration.Configure(again, MachineIdentity.Create(), CpuProfile.NativeIntel).Descendants("string").Count(x => x.Value.Contains("cpus=1")) == 1);
+});
 Test("OpenCore preserves template and writes masked CPU profile", () => { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist)); var id = MachineIdentity.Create(); var doc = OpenCoreConfiguration.Configure(input, id, CpuProfile.CometLakeEmulation); Check(doc.ToString().Contains(id.Serial) && doc.ToString().Contains("VQYKAAAAAAAAAAAAAAAAAA==") && doc.ToString().Contains("/////wAAAAAAAAAAAAAAAA==")); });
 Test("OpenCore rejects bare-metal template", () => { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist.Replace("MacHyperVSupport.kext", "WhateverGreen.kext"))); Throws<InvalidDataException>(() => OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel)); });
 Test("OpenCore duplicate key rejected", () => { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist.Replace("<key>ROM</key>", "<key>SystemUUID</key><string/><key>ROM</key>"))); Throws<InvalidDataException>(() => OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel)); });
 Test("OpenCore handles formatted plist with comments", () => { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist.Replace("</key>", "</key>\r\n<!-- source annotation -->\r\n"))); Check(OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel).Root is not null); });
-if (args.Length == 2 && args[0] == "--upstream-archive")
+
+// --- macOS version catalog -------------------------------------------------
+Test("Catalog covers OS X 10.7 through macOS 26 with unique versions", () => {
+    var versions = MacOsCatalog.Releases.Select(x => x.Version).ToArray();
+    Check(versions.Distinct().Count() == versions.Length && versions.First() == "26" && versions.Last() == "10.7" && MacOsCatalog.Default.Version == "15");
+    Check(MacOsCatalog.Releases.Zip(MacOsCatalog.Releases.Skip(1)).All(p => p.First.Darwin > p.Second.Darwin), "Releases must be ordered newest first");
+});
+Test("Recovery arguments follow OpenCore's recovery table", () => {
+    Check(MacOsCatalog.Require("26").RecoveryArguments.SequenceEqual(["-b", "Mac-CFF7D910A743CAAF", "-m", "00000000000000000", "-os", "latest"]));
+    Check(MacOsCatalog.Require("10.14").RecoveryArguments.SequenceEqual(["-b", "Mac-7BA5B2DFE22DDD8C", "-m", "00000000000KXPG00"]));
+    Check(MacOsCatalog.Require("15").RecoveryCacheName != MacOsCatalog.Require("10.13").RecoveryCacheName, "Releases sharing a board ID must not share a recovery cache");
+});
+Test("SMBIOS models exist in each release", () => {
+    Check(MacOsCatalog.Releases.Where(x => x.Darwin >= 20).All(x => x.SmbiosModel == "iMac20,1"));
+    Check(MacOsCatalog.Require("10.15").SmbiosModel == "iMac19,1" && MacOsCatalog.Require("10.13").SmbiosModel == "iMac18,3" && MacOsCatalog.Require("10.7").SmbiosModel == "iMac12,2");
+});
+Test("Every catalog version is accepted and unknown versions are rejected", () => {
+    foreach (var release in MacOsCatalog.Releases) Check(PlanValidator.Validate(Plan() with { MacOsVersion = release.Version }).Count == 0, release.Version);
+    Check(PlanValidator.Validate(Plan() with { MacOsVersion = "10.6" }).Count > 0 && PlanValidator.Validate(Plan() with { MacOsVersion = "27" }).Count > 0);
+});
+Test("Automatic Tahoe media requires the pinned MacHyperVSupport update", () => {
+    var plan = Plan() with { MacOsVersion = "26", BuildEfiFromArchive = true, RecoveryDmg = "C:\\r\\BaseSystem.dmg", RecoveryDmgSha256 = new('b', 64), RecoveryChunklist = "C:\\r\\BaseSystem.chunklist", RecoveryChunklistSha256 = new('c', 64) };
+    Check(PlanValidator.Validate(plan).Any(x => x.Contains("MacHyperVSupport")));
+    Check(!PlanValidator.Validate(plan with { HyperVDriverArchive = "C:\\r\\driver.zip", HyperVDriverSha256 = UpstreamAssets.MacHyperVSupport.Sha256 }).Any(x => x.Contains("MacHyperVSupport")));
+    Check(!PlanValidator.Validate(plan with { MacOsVersion = "15" }).Any(x => x.Contains("MacHyperVSupport")));
+});
+Test("Driver pin points at the official acidanthera release", () =>
+    Check(UpstreamAssets.MacHyperVSupport.Url.AbsoluteUri.StartsWith("https://github.com/acidanthera/MacHyperVSupport/releases/download/1.0.0/") && UpstreamAssets.MacHyperVSupport.Size == 4852457));
+
+// --- CPU profiles ------------------------------------------------------------
+CpuProfile Cpu(int model, string version, bool avx2 = true) => CpuCompatibility.Choose(true, 6, model, avx2, MacOsCatalog.Require(version));
+Test("Raptor Lake is presented as a CPU each release recognizes", () => {
+    Check(Cpu(0xBA, "26") == CpuProfile.CometLakeEmulation && Cpu(0xBA, "10.15") == CpuProfile.CometLakeEmulation);
+    Check(Cpu(0xBA, "10.14") == CpuProfile.HaswellEmulation && Cpu(0xBA, "10.8") == CpuProfile.HaswellEmulation);
+    Check(Cpu(0xBA, "10.7") == CpuProfile.IvyBridgeEmulation);
+});
+Test("Newer Intel generations are recognized", () => {
+    foreach (var model in new[] { 0xA7, 0xAA, 0xAC, 0xC5, 0xC6, 0xBD, 0xBE }) Check(Cpu(model, "15") == CpuProfile.CometLakeEmulation, $"0x{model:X2}");
+    Check(Cpu(0x7E, "15") == CpuProfile.NativeIntel && Cpu(0x7E, "10.14") == CpuProfile.HaswellEmulation, "Ice Lake is native only from Catalina");
+});
+Test("Native CPUs older than a release's minimum are emulated, not rejected", () => {
+    Check(Cpu(0x9E, "15") == CpuProfile.NativeIntel && Cpu(0x9E, "10.12") == CpuProfile.HaswellEmulation);
+    Check(Cpu(0x3C, "10.8") == CpuProfile.NativeIntel && Cpu(0x3C, "10.7") == CpuProfile.IvyBridgeEmulation);
+});
+Test("Sandy and Ivy Bridge stop at Monterey and Ventura+ requires AVX2", () => {
+    Check(Cpu(0x3A, "12", avx2: false) == CpuProfile.NativeIntel && Cpu(0x2A, "10.7", avx2: false) == CpuProfile.NativeIntel);
+    Throws<NotSupportedException>(() => Cpu(0x3A, "13", avx2: false));
+    Throws<NotSupportedException>(() => Cpu(0x3A, "26", avx2: false));
+    Throws<NotSupportedException>(() => Cpu(0x2A, "13", avx2: true));
+});
+Test("AMD and unknown Intel models fail closed", () => {
+    Throws<NotSupportedException>(() => CpuCompatibility.Choose(false, 25, 0x21, true, MacOsCatalog.Default));
+    Throws<NotSupportedException>(() => Cpu(0x01, "15"));
+    Throws<NotSupportedException>(() => CpuCompatibility.Choose(true, 15, 0x01, true, MacOsCatalog.Default));
+});
+
+// --- creation draft and resources ---------------------------------------------
+Test("Default VM name follows the chosen release until edited", () => {
+    var draft = new CreationDraft();
+    draft.ApplyMachines([Managed() with { Name = "Tahoe" }]);
+    draft.Release = MacOsCatalog.Require("26"); Check(draft.Name == "Tahoe 2");
+    draft.Release = MacOsCatalog.Require("10.13"); Check(draft.Name == "High Sierra" && PlanValidator.IsValidName(draft.Name));
+    draft.Name = "Work Mac"; draft.Release = MacOsCatalog.Require("14"); Check(draft.Name == "Work Mac");
+});
+Test("Compatibility boot recommends two virtual processors", () => Check(ResourcePolicy.Recommend(Host()).CpuCount == 2 && new CreationDraft().CpuCount == 2));
+Test("Power-of-two processor counts are identified", () => Check(new[] { 1, 2, 4, 8, 16 }.All(ResourcePolicy.IsPowerOfTwo) && !new[] { 0, 3, 6, 12 }.Any(ResourcePolicy.IsPowerOfTwo)));
+
+// --- OpenCore per-release configuration -----------------------------------------
+var legacyPlist = plist.Replace("<key>PlatformInfo</key>", "<key>Booter</key><dict><key>Quirks</key><dict><key>AllowRelocationBlock</key><false/><key>ForceExitBootServices</key><false/></dict></dict><key>PlatformInfo</key>");
+string PlistValue(XDocument doc, string key) => doc.Descendants("key").Single(x => x.Value == key).ElementsAfterSelf().First() is var e && e.Name == "string" ? e.Value : e.Name.LocalName;
+Test("OpenCore writes the release's SMBIOS model", () => {
+    foreach (var (version, model) in new[] { ("26", "iMac20,1"), ("10.15", "iMac19,1"), ("10.12", "iMac17,1") })
+    { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist)); Check(PlistValue(OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel, MacOsCatalog.Require(version)), "SystemProductName") == model, version); }
+});
+Test("OpenCore enables legacy booter quirks only for OS X 10.7", () => {
+    using var lion = new MemoryStream(Encoding.UTF8.GetBytes(legacyPlist));
+    var doc = OpenCoreConfiguration.Configure(lion, MachineIdentity.Create(), CpuProfile.IvyBridgeEmulation, MacOsCatalog.Require("10.7"));
+    Check(PlistValue(doc, "AllowRelocationBlock") == "true" && PlistValue(doc, "ForceExitBootServices") == "true");
+    using var sequoia = new MemoryStream(Encoding.UTF8.GetBytes(legacyPlist));
+    Check(PlistValue(OpenCoreConfiguration.Configure(sequoia, MachineIdentity.Create(), CpuProfile.NativeIntel), "AllowRelocationBlock") == "false");
+});
+Test("OpenCore writes Haswell and Ivy Bridge CPUID signatures", () => {
+    foreach (var (profile, data) in new[] { (CpuProfile.HaswellEmulation, "wwYDAAAAAAAAAAAAAAAAAA=="), (CpuProfile.IvyBridgeEmulation, "qQYDAAAAAAAAAAAAAAAAAA==") })
+    { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist)); var text = OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), profile, MacOsCatalog.Require("10.13")).ToString(); Check(text.Contains(data) && text.Contains("/////wAAAAAAAAAAAAAAAA=="), profile.ToString()); }
+});
+
+// --- power actions and removal -----------------------------------------------------
+Test("Turn off and reset are offered only in states Hyper-V accepts", () => {
+    Check(Managed("Running").CanTurnOff && Managed("Paused").CanTurnOff && Managed("Starting").CanTurnOff && !Managed("Off").CanTurnOff && !Managed("Saved").CanTurnOff);
+    Check(Managed("Running").CanReset && !Managed("Paused").CanReset && Managed("Off").CanDelete && !Managed("Running").CanDelete);
+    var external = Managed("Running") with { Notes = "" };
+    Check(!external.CanTurnOff && !external.CanReset && !(external with { State = "Off" }).CanDelete);
+});
+Test("Policy rechecks power and removal state", () => {
+    var running = Managed("Running");
+    VmManagementPolicy.RequireAllowed(new(OperationKind.TurnOff, VmId: running.Id), running);
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.DeleteVm, VmId: running.Id), running));
+    var off = Managed();
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.TurnOff, VmId: off.Id), off));
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.DeleteVm, VmId: off.Id), off with { Notes = "external" }));
+});
+Test("Only power actions may bypass the elevated helper", () => {
+    Check(HyperVAccess.IsLifecycle(OperationKind.TurnOff) && HyperVAccess.IsLifecycle(OperationKind.Start));
+    Check(!new[] { OperationKind.Create, OperationKind.DeleteVm, OperationKind.ResizeDisk, OperationKind.Export, OperationKind.GrantHyperVAccess, OperationKind.ExportBootLogs }.Any(HyperVAccess.IsLifecycle));
+});
+Test("Removal is limited to the VM's own pome folder", () => {
+    var operation = Guid.NewGuid();
+    var vm = new VmInfo(Guid.NewGuid(), "Mac", "Off", 2, 0, 0, "pome:v1:" + operation);
+    var folder = Path.Combine(temp, "pome-" + operation.ToString("N")); Directory.CreateDirectory(folder);
+    File.WriteAllText(Path.Combine(folder, "operation.json"), Json.Write(new OperationMarker(operation, "Created", "", true, vm.Id, DateTimeOffset.UtcNow)));
+    foreach (var name in new[] { "EFI.vhdx", "macOS.vhdx" }) File.WriteAllText(Path.Combine(folder, name), "disk");
+    VmDisk Disk(string path, string slot) => new(path, 0, slot);
+    var details = new VmDetails(vm.Id, "Mac", 2, 0, null, Path.Combine(folder, "Mac"), "Off", [Disk(Path.Combine(folder, "EFI.vhdx"), "SCSI 0:0"), Disk(Path.Combine(folder, "macOS.vhdx"), "SCSI 0:1")], [], []);
+    Check(CreationPreflight.RequireOwnedOperationFolder(vm, details) == folder);
+    var outside = Path.Combine(temp, "outside.vhdx"); File.WriteAllText(outside, "disk");
+    Throws<InvalidDataException>(() => CreationPreflight.RequireOwnedOperationFolder(vm, details with { Disks = [.. details.Disks, Disk(outside, "SCSI 0:2")] }));
+    Throws<InvalidDataException>(() => CreationPreflight.RequireOwnedOperationFolder(vm, details with { Checkpoints = [new(Guid.NewGuid(), "c", DateTime.Now)] }));
+    Throws<InvalidDataException>(() => CreationPreflight.RequireOwnedOperationFolder(vm, details with { ConfigurationLocation = temp }));
+    Throws<InvalidDataException>(() => CreationPreflight.RequireOwnedOperationFolder(vm with { Notes = "pome:v1:" + Guid.NewGuid() }, details));
+    var junction = Path.Combine(folder, "link");
+    using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe") { ArgumentList = { "/c", "mklink", "/J", junction, temp }, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!) mklink.WaitForExit();
+    if (Directory.Exists(junction))
+    {
+        Throws<InvalidDataException>(() => CreationPreflight.RequireOwnedOperationFolder(vm, details));
+        Directory.Delete(junction);
+    }
+});
+
+// --- AMD profile -------------------------------------------------------------------
+Test("AMD families map to AMD_Vanilla from High Sierra", () => {
+    foreach (var family in new[] { 0x17, 0x19, 0x1A }) Check(CpuCompatibility.Choose("AuthenticAMD", family, 0x21, true, MacOsCatalog.Require("26")) == CpuProfile.AmdVanilla, $"{family:X2}h");
+    Check(CpuCompatibility.Choose("AuthenticAMD", 0x15, 0x02, false, MacOsCatalog.Require("12")) == CpuProfile.AmdVanilla);
+    Throws<NotSupportedException>(() => CpuCompatibility.Choose("AuthenticAMD", 0x19, 0x21, true, MacOsCatalog.Require("10.12")));
+    Throws<NotSupportedException>(() => CpuCompatibility.Choose("AuthenticAMD", 0x15, 0x02, true, MacOsCatalog.Require("13")));
+    Throws<NotSupportedException>(() => CpuCompatibility.Choose("AuthenticAMD", 0x10, 0x02, true, MacOsCatalog.Require("12")));
+    Throws<NotSupportedException>(() => CpuCompatibility.Choose("HygonGenuine", 0x18, 0x00, true, MacOsCatalog.Require("12")));
+});
+string AmdPatchPlist()
+{
+    string Patch(string comment, string replace) => $"<dict><key>Comment</key><string>{comment}</string><key>Find</key><data>AAAA</data><key>Identifier</key><string>kernel</string><key>Replace</key><data>{replace}</data></dict>";
+    var core = new[] { "uAAAAAAA", "ugAAAAAA", "ugAAAACQ", "ugAAAAA=" }.Select(r => Patch("algrey | Force cpuid_cores_per_package to constant (user-specified) | 10.x", r));
+    var other = Enumerable.Range(0, 8).Select(i => Patch($"algrey | other patch {i}", "kJA="));
+    return $"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Kernel</key><dict><key>Patch</key><array>{string.Concat(core.Concat(other))}</array></dict></dict></plist>";
+}
+var amdConfig = plist.Replace("<key>Emulate</key><dict>", "<key>Patch</key><array><dict><key>Comment</key><string>hv_vmm_present</string></dict></array><key>Emulate</key><dict><key>DummyPowerManagement</key><false/>");
+Test("AMD patches receive the VM core count, DummyPowerManagement and the Hyper-V wrmsr patch", () => {
+    var patches = AmdKernelPatches.Read(new MemoryStream(Encoding.UTF8.GetBytes(AmdPatchPlist())));
+    using var input = new MemoryStream(Encoding.UTF8.GetBytes(amdConfig));
+    var doc = OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.AmdVanilla, MacOsCatalog.Require("15"), patches, 4);
+    var patchArray = doc.Descendants("key").First(x => x.Value == "Patch").ElementsAfterSelf().First();
+    var replaces = patchArray.Elements("dict").Where(d => d.ToString().Contains("cores_per_package")).Select(d => Convert.FromBase64String(d.Elements("key").Single(k => k.Value == "Replace").ElementsAfterSelf().First().Value)).ToArray();
+    Check(replaces.Length == 4 && replaces.All(r => r[1] == 4 && r[0] is 0xB8 or 0xBA), "Core count not written");
+    Check(patchArray.Elements("dict").Count() == 1 + 12 + 1, "Existing template patches must be kept and AMD/Hyper-V patches added once");
+    Check(doc.ToString().Contains(AmdKernelPatches.HyperVWrmsrComment) && PlistValue(doc, "DummyPowerManagement") == "true");
+    Check(doc.ToString().Contains("AAAAAAAAAAAAAAAAAAAAAA=="), "AMD must not receive an Intel CPUID spoof");
+    using var again = new MemoryStream(Encoding.UTF8.GetBytes(doc.ToString()));
+    var twice = OpenCoreConfiguration.Configure(again, MachineIdentity.Create(), CpuProfile.AmdVanilla, MacOsCatalog.Require("15"), patches, 8);
+    Check(twice.Descendants("key").First(x => x.Value == "Patch").ElementsAfterSelf().First().Elements("dict").Count() == 14, "Reapplying duplicated AMD patches");
+});
+Test("AMD patch lists with unexpected placeholders are rejected", () => {
+    Throws<InvalidDataException>(() => AmdKernelPatches.Read(new MemoryStream(Encoding.UTF8.GetBytes(AmdPatchPlist().Replace("Force cpuid_cores_per_package", "x")))));
+    var patches = AmdKernelPatches.Read(new MemoryStream(Encoding.UTF8.GetBytes(AmdPatchPlist().Replace("uAAAAAAA", "uAQAAAAA"))));
+    using var input = new MemoryStream(Encoding.UTF8.GetBytes(amdConfig));
+    Throws<InvalidDataException>(() => OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.AmdVanilla, MacOsCatalog.Require("15"), patches, 4));
+    using var missing = new MemoryStream(Encoding.UTF8.GetBytes(amdConfig));
+    Throws<InvalidDataException>(() => OpenCoreConfiguration.Configure(missing, MachineIdentity.Create(), CpuProfile.AmdVanilla, MacOsCatalog.Require("15")));
+});
+Test("AMD plans need verified patches and power-of-two processors", () => {
+    var plan = Plan() with { BuildEfiFromArchive = true, CpuProfile = CpuProfile.AmdVanilla, RecoveryDmg = "C:\\r\\a.dmg", RecoveryDmgSha256 = new('b', 64), RecoveryChunklist = "C:\\r\\a.chunklist", RecoveryChunklistSha256 = new('c', 64) };
+    Check(PlanValidator.Validate(plan).Any(x => x.Contains("AMD_Vanilla")));
+    var ready = plan with { AmdPatches = "C:\\r\\p.plist", AmdPatchesSha256 = UpstreamAssets.AmdVanillaPatches.Sha256 };
+    Check(!PlanValidator.Validate(ready).Any(x => x.Contains("AMD")));
+    Check(PlanValidator.Validate(ready with { CpuCount = 6 }).Any(x => x.Contains("2, 4, 8")));
+    Check(PlanValidator.Validate(ready with { MacOsVersion = "10.12" }).Any(x => x.Contains("High Sierra")));
+});
+Test("AMD hosts keep the processor count that the boot media encodes", () => {
+    var vm = Managed();
+    var amdHost = Host() with { CpuVendor = "AuthenticAMD" };
+    Throws<InvalidDataException>(() => VmManagementPolicy.RequireAllowed(new(OperationKind.Configure, VmId: vm.Id, Configuration: new("Mac", 8, 8, "Default Switch")), vm, amdHost));
+    VmManagementPolicy.RequireAllowed(new(OperationKind.Configure, VmId: vm.Id, Configuration: new("Mac", vm.ProcessorCount, 8, "Default Switch")), vm, amdHost);
+    VmManagementPolicy.RequireAllowed(new(OperationKind.Configure, VmId: vm.Id, Configuration: new("Mac", 8, 8, "Default Switch")), vm, Host());
+});
+Test("AMD patch pin points at a fixed AMD_Vanilla commit on an allowlisted host", () =>
+    Check(UpstreamAssets.AmdVanillaPatches.Url.AbsoluteUri == "https://raw.githubusercontent.com/AMD-OSX/AMD_Vanilla/eaf52ef292abf4ebec899df6d48626569ba50cc6/patches.plist"));
+Test("Multi-CPU boots stay disabled until a fixed driver is pinned", () => {
+    Check(!GuestDriverPolicy.PinnedDriverFixesSmp && GuestDriverPolicy.LimitToOneCpu(true) && GuestDriverPolicy.LimitToOneCpu(false));
+    Check(GuestDriverPolicy.UsesUpdatedDriver(MacOsCatalog.Require("26")) && !GuestDriverPolicy.UsesUpdatedDriver(MacOsCatalog.Require("15")));
+    using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist));
+    var smp = OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel, limitToOneCpu: false);
+    Check(PlistValue(smp, "boot-args") == "-v keepsyms=1", "A fixed driver must remove every cpus= limit");
+});
+var amdArgument = Array.IndexOf(args, "--amd-patches");
+if (amdArgument >= 0 && amdArgument + 1 < args.Length)
+{
+    AsyncTest("Real pinned AMD_Vanilla patches parse and receive the core count", async () => {
+        var file = SafePaths.RequireLocal(args[amdArgument + 1]);
+        await SafePaths.VerifyHashAsync(file, UpstreamAssets.AmdVanillaPatches.Sha256);
+        await using var stream = File.OpenRead(file);
+        var patches = AmdKernelPatches.Read(stream);
+        using var input = new MemoryStream(Encoding.UTF8.GetBytes(amdConfig));
+        var doc = OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.AmdVanilla, MacOsCatalog.Require("26"), patches, 8);
+        Check(doc.Descendants("data").Count(x => x.Value is "uAgAAAAA" or "uggAAAAA" or "uggAAACQ" or "uggAAAA=") == 4, "Real core-count patches were not set to 8");
+    });
+}
+var archiveArgument = Array.IndexOf(args, "--upstream-archive");
+if (archiveArgument >= 0 && archiveArgument + 1 < args.Length)
 {
     AsyncTest("Pinned upstream EFI configured and accepted by real ocvalidate", async () =>
     {
         var output = Path.Combine(temp, "upstream-efi");
-        await BootMedia.ConfigureAsync(args[1], output, CpuProfile.CometLakeEmulation, MachineIdentity.Create());
+        await BootMedia.ConfigureAsync(args[archiveArgument + 1], output, CpuProfile.CometLakeEmulation, MachineIdentity.Create());
         await BootMedia.ValidateAsync(output);
+    });
+}
+var recoveryArgument = Array.IndexOf(args, "--recovery-image");
+if (recoveryArgument >= 0 && recoveryArgument + 1 < args.Length)
+{
+    AsyncTest("Real cached recovery restores to a separate GPT disk without mounting", async () => {
+        var source = SafePaths.RequireLocal(args[recoveryArgument + 1]);
+        var output = Path.Combine(temp, "actual-recovery.vhd");
+        var size = RecoveryDisk.GetVirtualSize(source);
+        await RecoveryDisk.RestoreAsync(source, output);
+        Check(new FileInfo(output).Length == size + 512);
+        Console.WriteLine($"Recovery validation artifact: {output}");
     });
 }
 if (args.Contains("--host-survey"))

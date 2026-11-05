@@ -1,0 +1,87 @@
+--- a/MacHyperVSupport/Controller/HyperVControllerInterrupts.cpp
++++ b/MacHyperVSupport/Controller/HyperVControllerInterrupts.cpp
+@@ -8,6 +8,7 @@
+ #include "HyperVController.hpp"
+ #include "HyperVInterruptController.hpp"
+ #include "VMBus.hpp"
++#include <libkern/OSAtomic.h>
+ 
+ #if __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_6
+ //
+@@ -83,16 +84,12 @@
+   wrmsr64(kHyperVMsrSyncICControl, kHyperVMsrSyncICControlEnable | (rdmsr64(kHyperVMsrSyncICControl) & kHyperVMsrSyncICControlRsvdMask));
+ }
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_10_6
+ extern "C" void doAllCpuSyncICEOM(void *cpu) {
+-  int currentCpuIndex  = cpu_number();
+-  int *desiredCpuIndex = (int*)cpu;
+-
+-  if (currentCpuIndex == *desiredCpuIndex) {
++  UInt32 desiredCpu = *static_cast<UInt32*>(cpu);
++  if (static_cast<UInt32>(cpu_number()) == desiredCpu) {
+     wrmsr64(kHyperVMsrEom, 0);
+   }
+ }
+-#endif
+ 
+ bool HyperVController::allocateInterruptBuffers() {
+   //
+@@ -311,48 +308,17 @@
+ }
+ 
+ void HyperVController::sendSynICEOM(UInt32 cpu) {
+-  //
+-  // Only EOM if there is a pending message.
+-  //
++  if (_cpuData == nullptr || cpu >= _cpuDataCount) {
++    HVSYSLOG("Invalid SynIC CPU index %u", cpu);
++    return;
++  }
+   _cpuData[cpu].messages[kVMBusInterruptMessage].type = kHyperVMessageTypeNone;
++  OSMemoryBarrier();
+   if (!_cpuData[cpu].messages[kVMBusInterruptMessage].flags.messagePending) {
+     return;
+   }
+-  
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_6
+-  //
+-  // Change to desired CPU if needed.
+-  //
+-  if (cpu != cpu_number()) {
+-    if (!IOSimpleLockTryLock(_preemptionLock)) {
+-      HVSYSLOG("Failed to disable preemption");
+-      return;
+-    }
+-
+-    bool intsEnabled = ml_set_interrupts_enabled(false);
+-
+-    do {
+-      processor_t proc = _pmCallbacks.LCPUtoProcessor(cpu);
+-      if (proc == nullptr) {
+-        break;
+-      }
+-
+-      _pmCallbacks.ThreadBind(proc);
+-    } while (false);
+-
+-    IOSimpleLockUnlock(_preemptionLock);
+-    ml_set_interrupts_enabled(intsEnabled);
+-    HVDBGLOG("Changed to cpu %u", cpu_number());
+-  }
+-
+-  //
+-  // We should now be on the correct CPU, so send EOM.
+-  //
+-  wrmsr64(kHyperVMsrEom, 0);
+-#else
+-  //
+-  // PM kext API does not exist on 10.4, call function on all CPUs.
+-  //
++  // Binding a work-loop thread does not immediately migrate it. The EOM MSR
++  // is per-CPU: synchronously acknowledge only its owner. No IOKit lock is
++  // held by this method while the rendezvous runs; its callback never blocks.
+   mp_rendezvous_no_intrs(doAllCpuSyncICEOM, &cpu);
+-#endif
+-}
++}

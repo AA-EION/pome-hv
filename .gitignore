@@ -7,3 +7,4 @@ artifacts/
 *.user
 *.db*
 .impeccable/
+**/__pycache__/

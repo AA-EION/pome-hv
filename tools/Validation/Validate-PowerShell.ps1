@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $failed = $false
-Get-ChildItem -LiteralPath (Join-Path $root 'src/Infrastructure/Scripts') -Filter '*.ps1' | ForEach-Object {
+Get-ChildItem -LiteralPath (Join-Path $root 'src/Infrastructure/Scripts'), (Join-Path $root 'tools/BootCheck') -Filter '*.ps1' | ForEach-Object {
     $tokens = $null
     $errors = $null
     [Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null

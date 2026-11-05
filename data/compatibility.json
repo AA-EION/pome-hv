@@ -1,11 +1,170 @@
 {
   "schemaVersion": 1,
-  "reviewedOn": "2026-10-15",
+  "reviewedOn": "2026-11-05",
   "applicationVersion": "0.1.0",
-  "host": { "architecture": "x64", "minimumWindowsBuild": 19041, "clientEditions": ["Professional", "Enterprise", "Education"] },
+  "host": {
+    "architecture": "x64",
+    "minimumWindowsBuild": 19041,
+    "clientEditions": [
+      "Professional",
+      "Enterprise",
+      "Education"
+    ]
+  },
   "guests": [
-    { "version": "15", "name": "Sequoia", "status": "Experimental", "pomeBootValidated": false, "minimumMemoryGiB": 8, "minimumDiskGiB": 64, "efiRelease": "OSX-Hyper-V/0.4.0" },
-    { "version": "26", "name": "Tahoe", "status": "DetectedUntested", "enabled": false, "reason": "No validated complete pome boot stack." }
+    {
+      "version": "26",
+      "name": "Tahoe",
+      "status": "Experimental",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0",
+      "note": "MacHyperVSupport 1.0.0 replaces the pinned 0.9.x driver (MacKernelSDK#25 PCI layout fix)."
+    },
+    {
+      "version": "15",
+      "name": "Sequoia",
+      "status": "Experimental",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0",
+      "note": "Recovery and installer reached on the reference host."
+    },
+    {
+      "version": "14",
+      "name": "Sonoma",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "13",
+      "name": "Ventura",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "12",
+      "name": "Monterey",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "11",
+      "name": "Big Sur",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.15",
+      "name": "Catalina",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.14",
+      "name": "Mojave",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.13",
+      "name": "High Sierra",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.12",
+      "name": "Sierra",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.11",
+      "name": "El Capitan",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.10",
+      "name": "Yosemite",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.9",
+      "name": "Mavericks",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.8",
+      "name": "Mountain Lion",
+      "status": "UpstreamSupported",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0"
+    },
+    {
+      "version": "10.7",
+      "name": "Lion",
+      "status": "Experimental",
+      "enabled": true,
+      "pomeBootValidated": false,
+      "minimumMemoryGiB": 4,
+      "minimumDiskGiB": 64,
+      "efiRelease": "OSX-Hyper-V/0.4.0",
+      "note": "Legacy OpenCore booter quirks (AllowRelocationBlock, ForceExitBootServices)."
+    }
   ],
   "graphics": {
     "synthetic": "Experimental",
@@ -14,5 +173,16 @@
     "serverDda": "Unknown",
     "metalValidated": false
   },
-  "nullmoth": { "version": "2.0.2", "delivery": "ExplicitDownloadOnly", "bundled": false, "automaticInstallation": false, "license": "PolyForm-Noncommercial-1.0.0" }
+  "nullmoth": {
+    "version": "2.0.2",
+    "delivery": "ExplicitDownloadOnly",
+    "bundled": false,
+    "automaticInstallation": false,
+    "license": "PolyForm-Noncommercial-1.0.0"
+  },
+  "guestCatalogSource": "src/Core/MacOsCatalog.cs",
+  "notSupported": {
+    "10.4-10.6": "Requires Generation 1 VMs and 32-bit EFI; install a newer version and restore an image instead.",
+    "27+": "Apple silicon only; no Intel builds."
+  }
 }

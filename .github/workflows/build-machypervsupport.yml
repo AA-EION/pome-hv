@@ -1,0 +1,126 @@
+name: Build multi-CPU MacHyperVSupport
+
+# Builds MacHyperVSupport 1.0.0 with pome's SynIC EOM fix (patches/MacHyperVSupport/0005,
+# equivalent to acidanthera/MacHyperVSupport#12) so macOS guests can boot with more than one
+# active vCPU. Every input is pinned; the job prints the archive's SHA-256 for pinning in pome.
+on:
+  workflow_dispatch:
+    inputs:
+      vmbus_retry_backoff:
+        description: Also apply acidanthera/MacHyperVSupport#13 (VMBus message retry backoff)
+        type: boolean
+        default: true
+      software_cursor:
+        description: Also apply #14 (software cursor; fixes the vanishing cursor on macOS 26)
+        type: boolean
+        default: true
+      network_start_failure:
+        description: Also apply #15 (fail network start instead of panicking)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_TYPE: KEXT
+  ACID32: 1
+  MHV_COMMIT: cafcd34daea5e58633112a1e63cef1f07bbc8404        # MacHyperVSupport 1.0.0
+  SDK_COMMIT: 3f750085caa17ec3a7880f11c11bf4f48cd6a164        # MacKernelSDK incl. #25 (Tahoe IOPCIHostBridge layout)
+  OCBUILD_COMMIT: 020b14fa68a9825642e0c0fb643c2963bd679ae3    # acidanthera/ocbuild
+  LILU_COMMIT: 0249c3a918c68a43891350f35fded615b1575776       # acidanthera/Lilu
+  PR13_HEAD: 5e1b116507efa791753565b1ee5fec46bf02cfe5
+  PR14_HEAD: 995f87ddfaaabda23ee30bdd7e4d256cd0ae88e4
+  PR15_HEAD: 6379f26a367f0f5abd5596d4b8826a6f4f1d568e
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    env:
+      JOB_TYPE: BUILD
+    steps:
+      - name: Check out pome (for the patch)
+        uses: actions/checkout@v4
+        with:
+          path: pome
+      - name: Check out MacHyperVSupport 1.0.0
+        uses: actions/checkout@v4
+        with:
+          repository: acidanthera/MacHyperVSupport
+          ref: ${{ env.MHV_COMMIT }}
+          path: mhv
+          fetch-depth: 0
+      - name: Check out MacKernelSDK
+        uses: actions/checkout@v4
+        with:
+          repository: acidanthera/MacKernelSDK
+          ref: ${{ env.SDK_COMMIT }}
+          path: mhv/MacKernelSDK
+
+      - name: Apply SynIC EOM fix
+        working-directory: mhv
+        run: git apply --index ../pome/patches/MacHyperVSupport/0005-synic-eom-owner-cpu.patch
+
+      - name: Apply optional upstream pull requests
+        working-directory: mhv
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name pome-ci && git config user.email pome-ci@users.noreply.github.com
+          git commit -qm "pome: SynIC EOM on owning CPU (0005)"
+          apply_pr() {
+            local number=$1 expected=$2
+            git fetch -q origin "pull/${number}/head"
+            if [ "$(git rev-parse FETCH_HEAD)" != "$expected" ]; then
+              echo "PR #${number} head moved from the pinned ${expected}; review it and update the pin." >&2; exit 1
+            fi
+            git diff "$(git merge-base "$MHV_COMMIT" FETCH_HEAD)" FETCH_HEAD | git apply --3way --index
+            git commit -qm "Apply acidanthera/MacHyperVSupport#${number} (${expected})"
+          }
+          if [ "${{ inputs.vmbus_retry_backoff }}" = "true" ]; then apply_pr 13 "$PR13_HEAD"; fi
+          if [ "${{ inputs.software_cursor }}" = "true" ]; then apply_pr 14 "$PR14_HEAD"; fi
+          if [ "${{ inputs.network_start_failure }}" = "true" ]; then apply_pr 15 "$PR15_HEAD"; fi
+          git log --oneline "$MHV_COMMIT"..HEAD
+
+      - name: CI bootstrap (pinned ocbuild, Xcode 16.4)
+        working-directory: mhv
+        run: |
+          src=$(/usr/bin/curl -Lfs "https://raw.githubusercontent.com/acidanthera/ocbuild/${OCBUILD_COMMIT}/ci-bootstrap.sh") || exit 1
+          src=$(printf '%s\n' "$src" | sed -e 's/XCODE_VERSION="[^"]*"/XCODE_VERSION="16.4.0"/' -e 's#${DEVELOPER_DIR}/usr/bin/python3#/usr/bin/python3#g') || exit 1
+          eval "$src" || exit 1
+      - name: macOS 10.13 SDK bootstrap
+        working-directory: mhv
+        run: |
+          src=$(/usr/bin/curl -Lfs "https://raw.githubusercontent.com/acidanthera/ocbuild/${OCBUILD_COMMIT}/macosx10.13-sdk-bootstrap.sh") && eval "$src" || exit 1
+      - name: Lilu bootstrap
+        working-directory: mhv
+        run: |
+          src=$(/usr/bin/curl -Lfs "https://raw.githubusercontent.com/acidanthera/Lilu/${LILU_COMMIT}/Lilu/Scripts/bootstrap.sh") && eval "$src" || exit 1
+
+      - name: Build
+        working-directory: mhv
+        run: xcodebuild -jobs 1 -target "Package Universal" -configuration Release -arch ACID32 -arch x86_64
+
+      - name: Package for pome
+        working-directory: mhv
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip=$(ls build/Release/MacHyperVSupport-*-RELEASE.zip)
+          out="MacHyperVSupport-1.0.0-pome-smp-RELEASE.zip"
+          cp "$zip" "../$out"
+          cd ..
+          sha=$(shasum -a 256 "$out" | cut -d' ' -f1); size=$(stat -f%z "$out")
+          printf '{"archive":"%s","sha256":"%s","size":%s,"base":"%s","sdk":"%s","commits":"%s"}\n' \
+            "$out" "$sha" "$size" "$MHV_COMMIT" "$SDK_COMMIT" "$(git -C mhv log --format=%h "$MHV_COMMIT"..HEAD | tr '\n' ' ')" > build-info.json
+          cat build-info.json
+          echo "### Pin in pome" >> "$GITHUB_STEP_SUMMARY"
+          echo "SHA-256 \`$sha\`, size $size bytes. See docs/MULTI_CPU_DRIVER.md." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: machypervsupport-pome-smp
+          path: |
+            MacHyperVSupport-1.0.0-pome-smp-RELEASE.zip
+            build-info.json
+          retention-days: 90

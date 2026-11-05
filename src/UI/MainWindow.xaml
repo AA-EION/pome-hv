@@ -1,61 +1,155 @@
 <Window x:Class="Pome.UI.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:Pome.UI" xmlns:core="using:Pome.Core" Title="pome">
   <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <NavigationView x:Name="Navigation" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" PaneDisplayMode="Left" OpenPaneLength="220" SelectionChanged="Navigate">
-      <NavigationView.PaneHeader><StackPanel Margin="20,24,0,24" Spacing="4"><TextBlock Text="pome" FontSize="30" FontWeight="SemiBold"/><TextBlock Text="A place for your virtual Mac." FontSize="12" TextWrapping="Wrap"/></StackPanel></NavigationView.PaneHeader>
+    <Grid.Resources>
+      <Style x:Key="PageTitle" TargetType="TextBlock"><Setter Property="FontSize" Value="28"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
+      <Style x:Key="SectionTitle" TargetType="TextBlock"><Setter Property="FontSize" Value="18"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
+      <Style x:Key="Hint" TargetType="TextBlock"><Setter Property="FontSize" Value="13"/><Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
+      <Style x:Key="Surface" TargetType="Border"><Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/><Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="10"/><Setter Property="Padding" Value="24"/></Style>
+      <Style TargetType="Expander"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="20"/></Style>
+    </Grid.Resources>
+    <Grid.RowDefinitions><RowDefinition Height="48"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Grid x:Name="AppTitleBar" Background="Transparent" Padding="24,0,148,0"><StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center"><TextBlock Text="pome" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="macOS on Hyper-V" Style="{StaticResource Hint}" VerticalAlignment="Center"/></StackPanel></Grid>
+    <NavigationView x:Name="Navigation" Grid.Row="1" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" PaneDisplayMode="LeftCompact" IsPaneOpen="False" CompactPaneLength="64" OpenPaneLength="208" SelectionChanged="Navigate">
       <NavigationView.MenuItems>
-        <NavigationViewItem Content="Library" Tag="Library" Icon="Library" IsSelected="True"/>
-        <NavigationViewItem Content="Create a virtual machine" Tag="Create" Icon="Add"/>
+        <NavigationViewItem Content="Virtual machines" Tag="Library" Icon="Library" IsSelected="True"/>
+        <NavigationViewItem Content="Create a Mac" Tag="Create" Icon="Add"/>
         <NavigationViewItem Content="This computer" Tag="Computer"><NavigationViewItem.Icon><FontIcon Glyph="&#xE770;"/></NavigationViewItem.Icon></NavigationViewItem>
         <NavigationViewItem Content="Activity" Tag="Activity"><NavigationViewItem.Icon><FontIcon Glyph="&#xE823;"/></NavigationViewItem.Icon></NavigationViewItem>
+        <NavigationViewItem Content="Networks" Tag="Networks"><NavigationViewItem.Icon><FontIcon Glyph="&#xE774;"/></NavigationViewItem.Icon></NavigationViewItem>
       </NavigationView.MenuItems>
-      <NavigationView.PaneFooter><TextBlock Text="Engineering preview · 0.1" Margin="20,12" FontSize="12" TextWrapping="Wrap"/></NavigationView.PaneFooter>
-      <ScrollViewer HorizontalScrollBarVisibility="Disabled">
-        <Grid Padding="32,28,32,40" MaxWidth="1040" HorizontalAlignment="Stretch">
-          <StackPanel x:Name="LibraryPanel" Spacing="24">
-            <Grid><TextBlock Text="Your library" Style="{ThemeResource TitleTextBlockStyle}"/><Button Content="Refresh" HorizontalAlignment="Right" Click="Refresh" IsEnabled="{Binding Idle}"/></Grid>
-            <TextBlock Text="A little room for another world." FontSize="20"/>
-            <TextBlock Text="Inspect this computer, then create a virtual machine with a prepared Hyper-V boot disk. Existing machines appear below when Hyper-V is available." TextWrapping="Wrap" MaxWidth="650" HorizontalAlignment="Left"/>
-            <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Inspect this computer" Click="Inspect" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}"/><Button Content="Create a virtual machine" Click="GoCreate"/></StackPanel>
-            <ListView x:Name="VmList" ItemsSource="{Binding VirtualMachines}" SelectionMode="Single" MinHeight="100" AutomationProperties.Name="Virtual machines">
-              <ListView.ItemTemplate><DataTemplate x:DataType="core:VmInfo"><Grid Padding="8,12" MinWidth="300"><StackPanel Spacing="6"><TextBlock Text="{x:Bind Name}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="{x:Bind Summary}" TextWrapping="Wrap"/></StackPanel></Grid></DataTemplate></ListView.ItemTemplate>
-            </ListView>
-            <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Start" Click="StartVm" IsEnabled="{Binding Idle}"/><Button Content="Open console" Click="OpenConsole"/><Button Content="Shut down" Click="ShutdownVm" IsEnabled="{Binding Idle}"/></StackPanel>
-            <InfoBar IsOpen="True" IsClosable="False" Severity="Informational" Title="A clear starting point" Message="This preview has not yet validated a macOS boot. Existing VMs from other tools are shown read-only. GPU assignment is unavailable."/>
-          </StackPanel>
-          <StackPanel x:Name="CreatePanel" Visibility="Collapsed" Spacing="24" MaxWidth="720" HorizontalAlignment="Left">
-            <TextBlock Text="Make room for macOS" Style="{ThemeResource TitleTextBlockStyle}"/>
-            <TextBlock Text="Sequoia · experimental Hyper-V profile" FontSize="18"/>
-            <TextBlock Text="{Binding Advice}" TextWrapping="Wrap"/>
-            <TextBox Header="Name" Text="{Binding VmName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/>
-            <TextBox Header="Storage folder" Text="{Binding StorageRoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="An existing folder on a local drive"/>
-            <Grid ColumnSpacing="24"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-              <StackPanel><TextBlock Text="Virtual processors"/><Slider Minimum="2" Maximum="32" StepFrequency="1" Value="{Binding CpuCount, Mode=TwoWay}" AutomationProperties.Name="Virtual processors"/><TextBlock Text="{Binding CpuCount}"/></StackPanel>
-              <StackPanel Grid.Column="1"><TextBlock Text="Memory (GB)"/><Slider Minimum="4" Maximum="64" StepFrequency="1" Value="{Binding MemoryGiB, Mode=TwoWay}" AutomationProperties.Name="Memory in gigabytes"/><TextBlock Text="{Binding MemoryGiB}"/></StackPanel>
+      <NavigationView.FooterMenuItems><NavigationViewItem Content="Settings" Tag="Appearance" Icon="Setting"/></NavigationView.FooterMenuItems>
+      <Grid Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="12,0,0,0">
+        <Grid x:Name="LibraryPanel" Padding="28,24,28,20" RowSpacing="20">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="4"><TextBlock Text="Virtual machines" Style="{StaticResource PageTitle}"/><TextBlock Text="{Binding LibraryCount}" Style="{StaticResource Hint}"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"><Button Click="Refresh" IsEnabled="{Binding Idle}" ToolTipService.ToolTip="Refresh virtual machines" AutomationProperties.Name="Refresh virtual machines"><SymbolIcon Symbol="Refresh"/></Button><Button Content="Create a Mac" Click="GoCreate" Style="{StaticResource AccentButtonStyle}"/></StackPanel></Grid>
+          <Grid x:Name="LibraryWorkspace" Grid.Row="1" ColumnSpacing="24" RowSpacing="20">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="232"/><ColumnDefinition/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition Height="0"/></Grid.RowDefinitions>
+            <Grid x:Name="MachineListPane" RowSpacing="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <TextBox PlaceholderText="Find a virtual machine" Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Search virtual machines"/>
+              <ListView x:Name="VmList" Grid.Row="1" ItemsSource="{Binding FilteredMachines}" SelectedItem="{Binding SelectedVm, Mode=TwoWay}" SelectionMode="Single" IsEnabled="{Binding Idle}" AutomationProperties.Name="Virtual machines" HorizontalContentAlignment="Stretch"><ListView.ItemTemplate><DataTemplate x:DataType="core:VmInfo"><Grid Padding="4,10" ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE770;" FontSize="20" VerticalAlignment="Center"/><StackPanel Grid.Column="1" Spacing="4"><TextBlock Text="{x:Bind Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{x:Bind State}" Style="{StaticResource Hint}"/></StackPanel></Grid></DataTemplate></ListView.ItemTemplate></ListView>
+              <Button Grid.Row="2" Content="Load Hyper-V library…" Click="InspectAsAdministrator" IsEnabled="{Binding Idle}" HorizontalAlignment="Stretch" ToolTipService.ToolTip="Use administrator access when Windows restricts the VM list"/>
             </Grid>
-            <NumberBox Header="Disk capacity (GB)" Minimum="64" Maximum="2048" Value="{Binding DiskGiB, Mode=TwoWay}" SpinButtonPlacementMode="Inline"/>
-            <ComboBox Header="Network" ItemsSource="{Binding Switches}" SelectedItem="{Binding SelectedSwitch, Mode=TwoWay}" HorizontalAlignment="Stretch"/>
-            <TextBlock Text="Boot media" FontSize="22" FontWeight="SemiBold"/>
-            <CheckBox Content="Prepare EFI and download recovery from Apple" IsChecked="{Binding AutomaticMedia, Mode=TwoWay}"/>
-            <StackPanel Visibility="{Binding AutomaticMediaVisibility}" Spacing="16">
-              <TextBlock Text="Automatic preparation supports the reviewed Intel CPU matrix and uses OSX-Hyper-V 0.4.0 with Pome's built-in isolated Python virtual environment. The pinned template sets guest SIP to 0x03 (allows unsigned kexts and unrestricted filesystem access). Completed recovery downloads are verified again against Apple's signed chunklist before reuse." TextWrapping="Wrap"/>
-            </StackPanel>
-            <StackPanel Visibility="{Binding ManualMediaVisibility}" Spacing="16">
+            <Grid x:Name="MachineDetailPane" Grid.Column="1">
+              <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" Visibility="{Binding EmptySelectionVisibility}"><StackPanel Spacing="20" MaxWidth="580" HorizontalAlignment="Left" Margin="24,36,16,24">
+                <FontIcon Glyph="&#xE7F4;" FontSize="42" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" HorizontalAlignment="Left"/>
+                <StackPanel Spacing="10"><TextBlock Text="{Binding EmptyTitle}" Style="{StaticResource PageTitle}"/><TextBlock Text="{Binding EmptyDescription}" TextWrapping="Wrap" FontSize="16"/></StackPanel>
+                <Button Content="Create a Mac" Click="GoCreate" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left"/>
+                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,8"/>
+                <TextBlock Text="Already have virtual machines?" Style="{StaticResource SectionTitle}"/><TextBlock Text="Load your Hyper-V library to see existing machines. Windows may request administrator approval. Machines created by other tools remain read-only." Style="{StaticResource Hint}"/>
+                <HyperlinkButton Content="Inspect this computer" Click="Inspect" Padding="0" HorizontalAlignment="Left" IsEnabled="{Binding Idle}"/>
+              </StackPanel></ScrollViewer>
+              <Grid Visibility="{Binding SelectionVisibility}" RowSpacing="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition/></Grid.RowDefinitions>
+                <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions><Border Width="60" Height="60" CornerRadius="12" Background="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Top"><FontIcon Glyph="&#xE770;" FontSize="28" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"/></Border><StackPanel Grid.Column="1" Spacing="6"><TextBlock Text="{Binding SelectedTitle}" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Text="{Binding SelectedSummary}" TextWrapping="Wrap"/><TextBlock Text="{Binding OwnershipSummary}" Style="{StaticResource Hint}"/></StackPanel></Grid>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8"><Button Content="Start &amp; connect" Click="StartVm" IsEnabled="{Binding CanStartSelected}" Style="{StaticResource AccentButtonStyle}"/><Button Content="Console" Click="OpenConsole" IsEnabled="{Binding CanInspectSelected}"/><DropDownButton Content="Power" IsEnabled="{Binding CanInspectSelected}"><DropDownButton.Flyout><MenuFlyout><MenuFlyoutItem Text="Shut down" Click="ShutdownVm" IsEnabled="{Binding CanShutdownSelected}"/><MenuFlyoutItem Text="Pause" Click="PauseVm" IsEnabled="{Binding CanPauseSelected}"/><MenuFlyoutItem Text="Resume" Click="ResumeVm" IsEnabled="{Binding CanResumeSelected}"/><MenuFlyoutItem Text="Save state" Click="SaveVm" IsEnabled="{Binding CanSaveSelected}"/><MenuFlyoutSeparator/><MenuFlyoutItem Text="Reset" Click="ResetVm" IsEnabled="{Binding CanResetSelected}"/><MenuFlyoutItem Text="Turn off" Click="TurnOffVm" IsEnabled="{Binding CanTurnOffSelected}"/></MenuFlyout></DropDownButton.Flyout></DropDownButton><DropDownButton Content="More" IsEnabled="{Binding CanInspectSelected}" AutomationProperties.Name="More VM actions"><DropDownButton.Flyout><MenuFlyout><MenuFlyoutItem Text="Open VM folder" Click="OpenVmFolder" IsEnabled="{Binding CanOpenSelectedFolder}"/><MenuFlyoutSeparator/><MenuFlyoutItem Text="Remove VM…" Click="DeleteVm" IsEnabled="{Binding CanDeleteSelected}"/></MenuFlyout></DropDownButton.Flyout></DropDownButton><Button Click="LoadVmDetails" IsEnabled="{Binding CanInspectSelected}" ToolTipService.ToolTip="Reload settings and checkpoints" AutomationProperties.Name="Load settings and checkpoints"><SymbolIcon Symbol="Refresh"/></Button></StackPanel>
+                <Pivot x:Name="VmTabs" Grid.Row="2">
+                  <PivotItem Header="Overview"><ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Spacing="20" Padding="0,12,8,20"><TextBlock Text="Resources" Style="{StaticResource SectionTitle}"/><StackPanel Spacing="16"><StackPanel Spacing="4"><TextBlock Text="Processor" Style="{StaticResource Hint}"/><TextBlock Text="{Binding SelectedCpu}"/></StackPanel><StackPanel Spacing="4"><TextBlock Text="Startup memory" Style="{StaticResource Hint}"/><TextBlock Text="{Binding SelectedMemory}"/></StackPanel><StackPanel Spacing="4"><TextBlock Text="Current usage" Style="{StaticResource Hint}"/><TextBlock Text="{Binding SelectedUsage}"/></StackPanel><StackPanel Spacing="4"><TextBlock Text="Network" Style="{StaticResource Hint}"/><TextBlock Text="{Binding SelectedNetwork}"/></StackPanel></StackPanel><Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/><TextBlock Text="{Binding DetailsSummary}" Style="{StaticResource Hint}"/><Button Content="Load full settings…" Click="LoadVmDetails" IsEnabled="{Binding CanInspectSelected}" HorizontalAlignment="Left" Visibility="{Binding LoadDetailsVisibility}"/></StackPanel></ScrollViewer></PivotItem>
+                  <PivotItem Header="Hardware"><ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Spacing="20" Padding="0,16,8,20">
+              <ContentControl IsEnabled="{Binding CanEditSelected}" HorizontalContentAlignment="Stretch"><StackPanel Spacing="16">
+                <TextBlock Text="Load settings first. Shut down the VM before editing; pome keeps memory static for macOS." TextWrapping="Wrap"/>
+                <TextBox Header="Name" Text="{Binding EditName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/>
+                <NumberBox Header="Virtual processors" Minimum="2" Maximum="64" Value="{Binding EditCpuCount, Mode=TwoWay}" SpinButtonPlacementMode="Inline"/>
+                <NumberBox Header="Startup memory (GB)" Minimum="4" Maximum="128" Value="{Binding EditMemoryGiB, Mode=TwoWay}" SpinButtonPlacementMode="Inline"/>
+                <ComboBox Header="Network" ItemsSource="{Binding Switches}" SelectedItem="{Binding EditSwitch, Mode=TwoWay}" HorizontalAlignment="Stretch"/>
+                <Button Content="Review &amp; apply settings" Click="ApplyVmSettings" Style="{StaticResource AccentButtonStyle}"/>
+              </StackPanel></ContentControl>
+            </StackPanel></ScrollViewer></PivotItem>
+<PivotItem Header="Storage"><ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Spacing="20" Padding="0,16,8,20">
+              <StackPanel Spacing="16">
+                <ItemsControl ItemsSource="{Binding Disks}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="core:VmDisk"><TextBlock Text="{x:Bind Summary}" TextWrapping="Wrap" Margin="0,0,0,12"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                <NumberBox Header="Expand macOS disk to (GB)" Minimum="64" Maximum="2048" Value="{Binding ExpandedDiskGiB, Mode=TwoWay}" SpinButtonPlacementMode="Inline" IsEnabled="{Binding CanEditSelected}"/>
+                <Button Content="Expand disk…" Click="ExpandDisk" IsEnabled="{Binding CanEditSelected}"/>
+                <TextBlock Text="Export a backup first. Shut down and remove checkpoints before growing the original macOS disk. Then expand its APFS partition/container inside macOS Disk Utility." TextWrapping="Wrap"/>
+                <TextBlock Text="Firmware boot order" FontWeight="SemiBold"/>
+                <ItemsControl ItemsSource="{Binding BootOrder}"/>
+                <TextBlock Text="Keep OpenCore on the original EFI disk first. Select the installer or Macintosh HD inside OpenCore after a restart." TextWrapping="Wrap"/>
+                <Button Content="Put EFI disk first…" Click="RepairBoot" IsEnabled="{Binding CanManageSelected}"/>
+              </StackPanel>
+            </StackPanel></ScrollViewer></PivotItem>
+<PivotItem Header="Recovery"><ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Spacing="20" Padding="0,16,8,20">
+              <StackPanel Spacing="16">
+                <TextBlock Text="Shut down before creating, restoring or deleting checkpoints. Checkpoints depend on your original disks. Export a separate backup to protect against loss of those files." TextWrapping="Wrap"/>
+                <Button Content="Create checkpoint…" Click="CreateCheckpoint" IsEnabled="{Binding CanManageSelected}"/>
+                <ComboBox Header="Checkpoint" ItemsSource="{Binding Checkpoints}" SelectedItem="{Binding SelectedCheckpoint, Mode=TwoWay}" DisplayMemberPath="Summary" HorizontalAlignment="Stretch" AutomationProperties.Name="Checkpoint to restore or delete"/>
+                <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Restore…" Click="RestoreCheckpoint" IsEnabled="{Binding CanEditSelected}"/><Button Content="Delete checkpoint…" Click="DeleteCheckpoint" IsEnabled="{Binding CanEditSelected}"/></StackPanel>
+                <Button Content="Export VM backup…" Click="ExportVm" IsEnabled="{Binding CanManageSelected}"/>
+              </StackPanel>
+            </StackPanel></ScrollViewer></PivotItem>
+<PivotItem Header="Install macOS"><ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Spacing="20" Padding="0,16,8,20">
+              <StackPanel Spacing="16" MaxWidth="650" HorizontalAlignment="Left">
+                <TextBlock Text="1. Start and connect" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="Select your pome VM and choose Start &amp; connect. In OpenCore, choose macOS Base System / Recovery. Press Space if the recovery entry is hidden. Recovery needs a virtual switch with internet access." TextWrapping="Wrap"/>
+                <TextBlock Text="2. Prepare the destination disk" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="In Recovery, open Disk Utility and choose View → Show All Devices. Select the blank virtual disk whose capacity matches your creation plan. Erase it with GUID Partition Map as APFS (Mac OS Extended (Journaled) for 10.12 Sierra and older) and name it Macintosh HD. Keep the POME-BOOT / EFI and recovery disks intact." TextWrapping="Wrap"/>
+                <TextBlock Text="3. Install and allow restarts" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="Close Disk Utility, choose Reinstall macOS, and select Macintosh HD. Keep the VM running through restarts. In OpenCore, choose macOS Installer while installation is in progress, then Macintosh HD when it completes. Keep the EFI disk attached: it contains OpenCore." TextWrapping="Wrap"/>
+                <TextBlock Text="4. Install the guest tools" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="After macOS starts, open Terminal and run: sudo bash /Volumes/POME-BOOT/Scripts/post-install.sh (mount the POME-BOOT disk first if it is not shown). This installs graceful shutdown, time sync and file copy daemons, plus the framebuffer driver that adds display resolutions in System Settings → Displays. Approve the driver in Privacy &amp; Security, then restart. Until then, shut down from the Apple menu or use Power → Turn off." TextWrapping="Wrap"/>
+                <TextBlock Text="If recovery stalls" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock Text="Open Diagnostics to export the boot logs after shutting down the VM. Automatic media uses a separate recovery disk and compatibility CPU mode; Recovery and the Sequoia installer have been reached on the reference host. Installation completion and the first normal boot are still unverified." TextWrapping="Wrap"/>
+              </StackPanel>
+            </StackPanel></ScrollViewer></PivotItem>
+                  <PivotItem Header="Diagnostics"><ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Spacing="20" Padding="0,16,8,20" MaxWidth="650" HorizontalAlignment="Left">
+                    <StackPanel Spacing="8"><TextBlock Text="Keep the boot evidence" Style="{StaticResource SectionTitle}"/><TextBlock Text="Export OpenCore and kernel panic logs from the EFI disk to a folder on this computer. Shut down the VM first; pome reads its boot disk without changing it." TextWrapping="Wrap"/></StackPanel>
+                    <Button Content="Export boot logs…" Click="ExportBootLogs" IsEnabled="{Binding CanManageSelected}"/>
+                    <TextBlock Text="New automatic media saves boot logs by default. Older media may have logging disabled. Exports include the OpenCore configuration and VM identifiers; review them before sharing. Checkpointed VMs are currently unsupported." Style="{StaticResource Hint}"/>
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                    <StackPanel Spacing="8"><TextBlock Text="If macOS does not start" Style="{StaticResource SectionTitle}"/><TextBlock Text="A running Hyper-V VM does not confirm a successful macOS boot. Open Console to check the guest screen. A prohibitory symbol, a text-console error or a stalled installer each needs its own boot evidence." TextWrapping="Wrap"/></StackPanel>
+                  </StackPanel></ScrollViewer></PivotItem>
+                </Pivot>
+              </Grid>
+            </Grid>
+          </Grid>
+        </Grid>
+<Grid x:Name="CreatePanel" Visibility="Collapsed" Padding="28,24,28,20" RowSpacing="24">
+<Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+<StackPanel Spacing="6"><TextBlock Text="Create a Mac" Style="{StaticResource PageTitle}"/><TextBlock Text="{Binding CreationTitle}" Style="{StaticResource Hint}"/></StackPanel>
+<Grid Grid.Row="1" ColumnSpacing="32"><Grid.ColumnDefinitions><ColumnDefinition Width="184"/><ColumnDefinition/></Grid.ColumnDefinitions>
+<ListView x:Name="CreateSteps" SelectionMode="Single" SelectedIndex="0" SelectionChanged="ChangeCreateStep" IsEnabled="{Binding Idle}" HorizontalContentAlignment="Stretch" VerticalAlignment="Top" AutomationProperties.Name="Creation steps">
+<ListViewItem Tag="0"><StackPanel Spacing="4" Padding="4,10"><TextBlock Text="1   General" FontWeight="SemiBold"/><TextBlock Text="Version, name and storage" Style="{StaticResource Hint}"/></StackPanel></ListViewItem>
+<ListViewItem Tag="1"><StackPanel Spacing="4" Padding="4,10"><TextBlock Text="2   Resources" FontWeight="SemiBold"/><TextBlock Text="Compute and network" Style="{StaticResource Hint}"/></StackPanel></ListViewItem>
+<ListViewItem Tag="2"><StackPanel Spacing="4" Padding="4,10"><TextBlock Text="3   Installation" FontWeight="SemiBold"/><TextBlock Text="Recovery and OpenCore" Style="{StaticResource Hint}"/></StackPanel></ListViewItem>
+<ListViewItem Tag="3"><StackPanel Spacing="4" Padding="4,10"><TextBlock Text="4   Review" FontWeight="SemiBold"/><TextBlock Text="Confirm and create" Style="{StaticResource Hint}"/></StackPanel></ListViewItem>
+</ListView>
+<ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><ContentControl IsEnabled="{Binding Idle}" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top"><Grid MaxWidth="680" HorizontalAlignment="Stretch" Margin="0,0,8,24">
+<StackPanel x:Name="GeneralStep"  Spacing="24"><TextBlock Text="Make it yours" Style="{StaticResource SectionTitle}"/><TextBlock Text="Choose a macOS version, a name and a local folder for the VM and its disks." Style="{StaticResource Hint}"/>
+<ComboBox Header="macOS version" ItemsSource="{Binding Releases}" SelectedItem="{Binding SelectedRelease, Mode=TwoWay}" HorizontalAlignment="Stretch" AutomationProperties.Name="macOS version"><ComboBox.ItemTemplate><DataTemplate x:DataType="core:MacOsRelease"><StackPanel Spacing="2" Padding="0,4"><TextBlock Text="{x:Bind DisplayName}"/><TextBlock Text="{x:Bind EvidenceSummary}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/></StackPanel></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+<TextBlock Text="{Binding ReleaseGuidance}" Style="{StaticResource Hint}"/><TextBox Header="Name" Text="{Binding VmName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/>
+            <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox Header="Storage folder" Text="{Binding StorageRoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="An existing folder on a local drive"/><Button Grid.Column="1" Content="Browse…" Click="BrowseStorage" VerticalAlignment="Bottom" AutomationProperties.Name="Browse for storage folder"/></Grid><TextBlock Text="Pome creates a separate folder for this VM. Choose a local drive with room for the full disk capacity and boot media." Style="{StaticResource Hint}"/></StackPanel>
+<StackPanel x:Name="ResourcesStep" Visibility="Collapsed" Spacing="24"><TextBlock Text="Leave room for both worlds" Style="{StaticResource SectionTitle}"/><TextBlock Text="{Binding Advice}" Style="{StaticResource Hint}"/>
+<Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions><NumberBox Header="Virtual processors" Minimum="2" Maximum="64" Value="{Binding CpuCount, Mode=TwoWay}" SpinButtonPlacementMode="Inline"/><NumberBox Grid.Column="1" Header="Memory (GB)" Minimum="4" Maximum="128" Value="{Binding MemoryGiB, Mode=TwoWay}" SpinButtonPlacementMode="Inline"/></Grid>
+<TextBlock Text="{Binding CpuHint}" Style="{StaticResource Hint}"/>
+<Button Content="Use recommended resources" Click="UseRecommendedResources" HorizontalAlignment="Left"/>
+<NumberBox Header="Disk capacity (GB)" Minimum="64" Maximum="2048" Value="{Binding DiskGiB, Mode=TwoWay}" SpinButtonPlacementMode="Inline"/>
+<TextBlock Text="The disk grows as it is used. Pome checks space for its full capacity before creation." Style="{StaticResource Hint}"/>
+<ComboBox Header="Network switch" ItemsSource="{Binding Switches}" SelectedItem="{Binding SelectedSwitch, Mode=TwoWay}" HorizontalAlignment="Stretch"/>
+<TextBlock Text="Apple recovery needs internet access. Default Switch is usually the easiest choice on Windows client. Load networks from This computer if needed." Style="{StaticResource Hint}"/></StackPanel>
+<StackPanel x:Name="MediaStep" Visibility="Collapsed" Spacing="24"><TextBlock Text="A guided start to macOS" Style="{StaticResource SectionTitle}"/><TextBlock Text="Prepare OpenCore and obtain recovery directly from Apple, or use boot disks you have already prepared." Style="{StaticResource Hint}"/>
+<ToggleSwitch Header="Prepare installation media automatically" IsOn="{Binding AutomaticMedia, Mode=TwoWay}" OnContent="Apple recovery + OpenCore" OffContent="Use my prepared boot disks"/>
+<StackPanel Visibility="{Binding AutomaticMediaVisibility}" Spacing="16"><TextBlock Text="Included in automatic preparation" FontWeight="SemiBold"/><TextBlock Text="Verified EFI tools, an individual machine identity, a separate Apple recovery disk and boot logging. Python is bundled; no separate setup is needed." TextWrapping="Wrap"/><TextBlock Text="Disk-based recovery avoids the RAM-disk boot failure observed with a 4 GB guest. Compatibility mode currently uses one active macOS CPU; the configured Hyper-V processor allocation is retained." Style="{StaticResource Hint}"/><TextBlock Text="Intel hosts from Sandy Bridge to Arrow Lake and AMD Ryzen/Threadripper (macOS 10.13+, AMD_Vanilla patches) are supported; newer Intel CPUs are presented as a model the chosen macOS version recognizes. Apple supplies the recovery for the version you picked. The boot disk also carries guest tools for after installation. Media preparation and disk conversion may take several minutes." Style="{StaticResource Hint}"/><TextBlock Text="{Binding ReleaseGuidance}" Style="{StaticResource Hint}"/></StackPanel>
+<StackPanel Visibility="{Binding ManualMediaVisibility}" Spacing="16">
               <TextBlock Text="Use a prepared OSX-Hyper-V EFI VHDX with a unique machine identity and the right CPU profile. Verify its SHA-256 against your trusted build record. Recovery can be on that EFI disk or a separate VHDX." TextWrapping="Wrap"/>
-              <TextBox Header="EFI VHDX path" Text="{Binding EfiSource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+              <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox Header="EFI VHDX path" Text="{Binding EfiSource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/><Button Grid.Column="1" Content="Browse…" Click="BrowseEfi" VerticalAlignment="Bottom" AutomationProperties.Name="Browse for EFI VHDX"/></Grid>
               <TextBox Header="EFI SHA-256" Text="{Binding EfiHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/>
-              <Expander Header="Separate recovery disk (optional)" HorizontalAlignment="Stretch"><StackPanel Spacing="16"><TextBox Header="Recovery VHDX path" Text="{Binding RecoverySource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/><TextBox Header="Recovery SHA-256" Text="{Binding RecoveryHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/></StackPanel></Expander>
-            </StackPanel>
-            <InfoBar IsOpen="True" IsClosable="False" Severity="Informational" Title="After creating the virtual machine" Message="Start the VM from Library and choose Open console. In OpenCore, pick the macOS Base System / Recovery entry. Open Disk Utility, erase the new virtual disk as APFS (GUID Partition Map), close Disk Utility, and run Reinstall macOS."/>
-            <CheckBox IsChecked="{Binding AcceptLicense, Mode=TwoWay}"><TextBlock Text="I reviewed the applicable macOS license and have permission for this use. Apple limits macOS virtualization to qualifying Apple-branded hardware." TextWrapping="Wrap"/></CheckBox>
-            <HyperlinkButton Content="Read Apple's software licenses" NavigateUri="https://www.apple.com/legal/sla/"/>
-            <CheckBox IsChecked="{Binding AcceptFirmware, Mode=TwoWay}"><TextBlock Text="Allow Secure Boot to be turned off for this new guest. Prepared OpenCore media may also change guest SIP settings; I have reviewed that media's configuration." TextWrapping="Wrap"/></CheckBox>
-            <Button Content="Review and create" Style="{StaticResource AccentButtonStyle}" Click="CreateVm" IsEnabled="{Binding Idle}"/>
-          </StackPanel>
-          <StackPanel x:Name="ComputerPanel" Visibility="Collapsed" Spacing="24">
-            <TextBlock Text="{Binding HostTitle}" Style="{ThemeResource TitleTextBlockStyle}" TextWrapping="Wrap"/>
+              <Button Content="Calculate EFI SHA-256" Click="CalculateEfiHash"/>
+              <TextBlock Text="A calculated digest identifies your local file. Compare it with your trusted build record before creating the VM; calculating it does not establish the file's origin." TextWrapping="Wrap"/>
+              <Expander Header="Separate recovery disk (optional)" HorizontalAlignment="Stretch"><StackPanel Spacing="16"><Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox Header="Recovery VHDX path" Text="{Binding RecoverySource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/><Button Grid.Column="1" Content="Browse…" Click="BrowseRecovery" VerticalAlignment="Bottom" AutomationProperties.Name="Browse for recovery VHDX"/></Grid><TextBox Header="Recovery SHA-256" Text="{Binding RecoveryHash, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="64"/><Button Content="Calculate recovery SHA-256" Click="CalculateRecoveryHash"/></StackPanel></Expander>
+            </StackPanel></StackPanel>
+<StackPanel x:Name="ReviewStep" Visibility="Collapsed" Spacing="24"><TextBlock Text="Ready to prepare your Mac" Style="{StaticResource SectionTitle}"/><TextBlock Text="Pome checks the host, prepares media and asks you to review the final plan before administrator approval." Style="{StaticResource Hint}"/>
+<Border Style="{StaticResource Surface}"><StackPanel Spacing="12"><TextBlock Text="{Binding VmName}" FontSize="20" FontWeight="SemiBold"/><TextBlock Text="{Binding CreationResources}" TextWrapping="Wrap"/><TextBlock Text="{Binding SelectedSwitch}"/><TextBlock Text="{Binding CreationMedia}" TextWrapping="Wrap"/><TextBlock Text="{Binding StorageRoot}" Style="{StaticResource Hint}"/></StackPanel></Border>
+<CheckBox IsChecked="{Binding AcceptLicense, Mode=TwoWay}"><TextBlock Text="I have permission under Apple's macOS license, which restricts virtualization to qualifying Apple-branded hardware." TextWrapping="Wrap"/></CheckBox>
+<HyperlinkButton Content="Read Apple's software licenses" NavigateUri="https://www.apple.com/legal/sla/" Padding="0" HorizontalAlignment="Left"/>
+<CheckBox IsChecked="{Binding AcceptFirmware, Mode=TwoWay}"><TextBlock Text="Allow Secure Boot off for this guest. Automatic OpenCore media sets guest SIP to 0x03, allowing unsigned kexts and unrestricted filesystem access." TextWrapping="Wrap"/></CheckBox>
+<CheckBox IsChecked="{Binding StartAfterCreation, Mode=TwoWay}"><TextBlock Text="Start and open the console after creation" TextWrapping="Wrap"/></CheckBox>
+<InfoBar x:Name="CreationError" IsOpen="False" IsClosable="True" Severity="Error" Title="Check the creation plan"/></StackPanel>
+</Grid></ContentControl></ScrollViewer>
+</Grid>
+<Grid Grid.Row="2" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="0,16,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button x:Name="PreviousStepButton" Content="Back" Click="PreviousCreateStep" IsEnabled="{Binding Idle}" HorizontalAlignment="Left"/><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"><Button x:Name="NextStepButton" Content="Continue" Click="NextCreateStep" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}"/><Button x:Name="CreateButton" Content="Prepare &amp; create" Click="CreateVm" Visibility="Collapsed" IsEnabled="{Binding Idle}" Style="{StaticResource AccentButtonStyle}"/></StackPanel></Grid>
+</Grid>
+        <ScrollViewer x:Name="ComputerPanel" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel   Spacing="24" Padding="28,24,28,28">
+            <TextBlock Text="{Binding HostTitle}" Style="{StaticResource PageTitle}" TextWrapping="Wrap"/>
             <TextBlock Text="{Binding HostSummary}" TextWrapping="Wrap"/>
             <StackPanel Orientation="Horizontal" Spacing="12"><Button Content="Refresh assessment" Click="Refresh" IsEnabled="{Binding Idle}"/><Button Content="Inspect with administrator access" Click="InspectAsAdministrator" IsEnabled="{Binding Idle}"/><Button Content="Enable Hyper-V…" Click="EnableHyperV" IsEnabled="{Binding CanEnableHyperV}"/></StackPanel>
+            <StackPanel Spacing="8"><TextBlock Text="Fewer administrator prompts" Style="{StaticResource SectionTitle}"/><TextBlock Text="{Binding AccessSummary}" TextWrapping="Wrap"/><Button Content="Join Hyper-V Administrators…" Click="GrantHyperVAccess" IsEnabled="{Binding Idle}" Visibility="{Binding GrantAccessVisibility}" HorizontalAlignment="Left"/></StackPanel>
             <ItemsControl ItemsSource="{Binding Capabilities}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:CapabilityRow"><Grid Padding="0,14" ColumnSpacing="20"><Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Spacing="5"><TextBlock Text="{x:Bind Name}" FontWeight="SemiBold"/><TextBlock Text="{x:Bind State}" FontSize="12"/></StackPanel><TextBlock Grid.Column="1" Text="{x:Bind Detail}" TextWrapping="Wrap"/></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
             <TextBlock Text="Graphics hardware" FontSize="22" FontWeight="SemiBold"/>
             <ItemsControl ItemsSource="{Binding Gpus}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,16"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
@@ -63,16 +157,24 @@
             <TextBlock Text="NullMoth driver" FontSize="22" FontWeight="SemiBold"/>
             <TextBlock Text="Available separately from its author under PolyForm Noncommercial 1.0.0. Downloading does not establish compatibility or grant commercial-use rights. Pome does not install or run this driver." TextWrapping="Wrap"/>
             <StackPanel Orientation="Horizontal" Spacing="12"><HyperlinkButton Content="License and source" NavigateUri="https://github.com/nullmoth/nvidia-macos-driver/blob/v2.0.2/LICENSE"/><Button Content="Download upstream release…" Click="DownloadNullMoth" IsEnabled="{Binding Idle}"/></StackPanel>
-          </StackPanel>
-          <StackPanel x:Name="ActivityPanel" Visibility="Collapsed" Spacing="24">
-            <TextBlock Text="Activity &amp; recovery" Style="{ThemeResource TitleTextBlockStyle}"/>
-            <TextBlock Text="Incomplete operations remain visible after restart. Inspect the operation.json file in the VM's storage directory before retrying. Recovery never deletes a virtual disk automatically." TextWrapping="Wrap"/>
-            <ItemsControl ItemsSource="{Binding Activity}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="core:JournalEntry"><StackPanel Spacing="6" Margin="0,0,0,24"><TextBlock Text="{x:Bind Kind}" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="{x:Bind Stage}"/><TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap"/><TextBlock Text="{x:Bind ResourceDirectory}" FontSize="12" TextWrapping="Wrap"/><TextBlock Text="{x:Bind Id}" FontSize="12"/></StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
-            <Button Content="Export diagnostics" Click="ExportDiagnostics" IsEnabled="{Binding Idle}"/>
-          </StackPanel>
-        </Grid>
-      </ScrollViewer>
+          </StackPanel></ScrollViewer>
+<Grid x:Name="ActivityPanel" Visibility="Collapsed" Padding="28,24,28,20" RowSpacing="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/></Grid.RowDefinitions>
+<Grid ColumnSpacing="24"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="6"><TextBlock Text="Activity" Style="{StaticResource PageTitle}"/><TextBlock Text="Operation history and recovery details, kept on this computer." Style="{StaticResource Hint}"/></StackPanel><Button Grid.Column="1" Content="Export diagnostics" Click="ExportDiagnostics" IsEnabled="{Binding Idle}" VerticalAlignment="Center"/></Grid>
+<ListView Grid.Row="1" ItemsSource="{Binding Activity}" SelectionMode="None" HorizontalContentAlignment="Stretch" AutomationProperties.Name="Operation history"><ListView.ItemTemplate><DataTemplate x:DataType="core:JournalEntry"><Expander HorizontalAlignment="Stretch" Margin="0,0,0,8"><Expander.Header><Grid ColumnSpacing="24"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition/></Grid.ColumnDefinitions><TextBlock Text="{x:Bind Kind}" FontWeight="SemiBold"/><TextBlock Grid.Column="1" Text="{x:Bind Stage}"/></Grid></Expander.Header><StackPanel Spacing="12"><TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap"/><TextBlock Text="{x:Bind ResourceDirectory}" Style="{StaticResource Hint}"/><TextBlock Text="{x:Bind UpdatedAt}" Style="{StaticResource Hint}"/><TextBlock Text="{x:Bind Id}" Style="{StaticResource Hint}"/></StackPanel></Expander></DataTemplate></ListView.ItemTemplate></ListView>
+</Grid>
+<ScrollViewer x:Name="NetworksPanel" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Padding="28,24,28,28" Spacing="24" MaxWidth="900" HorizontalAlignment="Stretch">
+<StackPanel Spacing="6"><TextBlock Text="Networks" Style="{StaticResource PageTitle}"/><TextBlock Text="Connect your virtual Mac through an existing Hyper-V switch." Style="{StaticResource Hint}"/></StackPanel>
+<Button Content="Load networks…" Click="InspectAsAdministrator" IsEnabled="{Binding Idle}" HorizontalAlignment="Left" Style="{StaticResource AccentButtonStyle}"/>
+<ItemsControl ItemsSource="{Binding AvailableNetworks}"><ItemsControl.ItemTemplate><DataTemplate><Grid Padding="0,20" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions><FontIcon Glyph="&#xE774;" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="{Binding}" TextWrapping="Wrap"/></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+<TextBlock Text="Default Switch is usually the simplest choice on Windows client. Its presence does not prove guest internet access. Choosing Disconnected during creation leaves the VM without a network link." Style="{StaticResource Hint}"/>
+</StackPanel></ScrollViewer>
+<ScrollViewer x:Name="AppearancePanel" Visibility="Collapsed" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Padding="28,24,28,28" Spacing="24" MaxWidth="900" HorizontalAlignment="Stretch">
+<StackPanel Spacing="6"><TextBlock Text="Settings" Style="{StaticResource PageTitle}"/><TextBlock Text="Make pome feel at home on your desktop." Style="{StaticResource Hint}"/></StackPanel>
+<Grid ColumnSpacing="24" Padding="0,12,0,24" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions><StackPanel Spacing="6"><TextBlock Text="Appearance" FontWeight="SemiBold"/><TextBlock Text="Follow Windows, or choose a theme for pome." Style="{StaticResource Hint}"/></StackPanel><ComboBox Grid.Column="1" x:Name="ThemeChoice" SelectionChanged="ChangeTheme" SelectedIndex="0" HorizontalAlignment="Stretch" AutomationProperties.Name="App theme"><ComboBoxItem Content="Use Windows setting"/><ComboBoxItem Content="Light"/><ComboBoxItem Content="Dark"/></ComboBox></Grid>
+<StackPanel Spacing="8"><TextBlock Text="pome" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Engineering preview · 0.1" Style="{StaticResource Hint}"/><TextBlock Text="A native home for macOS virtual machines on Hyper-V." TextWrapping="Wrap"/></StackPanel>
+</StackPanel></ScrollViewer>
+      </Grid>
     </NavigationView>
-    <StackPanel Grid.Row="1" Spacing="8" Padding="20,12"><Button Content="Cancel preparation" Click="CancelPreparation" IsEnabled="{Binding CanCancel}"/><ProgressBar IsIndeterminate="{Binding Busy}" Height="2"/><TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite"/></StackPanel>
+    <Grid Grid.Row="2" Padding="24,8" ColumnSpacing="16" MinHeight="40"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ProgressBar Grid.ColumnSpan="2" VerticalAlignment="Top" Margin="-24,-8,-24,0" Height="2" IsIndeterminate="{Binding Busy}" Visibility="{Binding BusyVisibility}"/><TextBlock Text="{Binding Status}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTipService.ToolTip="{Binding Status}" AutomationProperties.LiveSetting="Polite"/><Button Grid.Column="1" Content="Cancel preparation" Click="CancelPreparation" Visibility="{Binding CancelVisibility}" IsEnabled="{Binding CanCancel}"/></Grid>
   </Grid>
 </Window>
