@@ -1607,7 +1607,11 @@ static void nvaccelInstallSysctl(void)
     if (gSysctlInstalled) return;
 #ifdef NMX_ACCEL
     // only this one: the NVIDIA accelerator may be loaded too, and owns the debug.nvaccel* names
+#if defined(PVG_ACCEL)
+    sysctl_register_oid(&sysctl__debug_pvgaccel_headless);
+#else
     sysctl_register_oid(&sysctl__debug_nmxaccel_headless);
+#endif
     gSysctlInstalled = true;
 #else
     sysctl_register_oid(&sysctl__debug_nvaccelfb);

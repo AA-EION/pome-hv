@@ -120,6 +120,9 @@ def patch_accel(accel):
               '#if defined(PVG_ACCEL)\nSYSCTL_INT(_debug, OID_AUTO, pvgaccel_headless, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &gNvHeadless, 0,\n'
               '           "1 = Hyper-V virtual GPU Metal device for apps; frames are copied to the synthetic framebuffer");\n'
               '#elif defined(NMX_ACCEL)\nSYSCTL_INT(_debug, OID_AUTO, nmxaccel_headless,')
+    edit(src, '    sysctl_register_oid(&sysctl__debug_nmxaccel_headless);\n',
+              '#if defined(PVG_ACCEL)\n    sysctl_register_oid(&sysctl__debug_pvgaccel_headless);\n#else\n'
+              '    sysctl_register_oid(&sysctl__debug_nmxaccel_headless);\n#endif\n')
     # Probe: the provider is pome's transport, not a PCI GPU.
     edit(src, '        ALOG("probe(%s) score %d", provider ? provider->getName() : "?", score ? (int)*score : 0);',
               '        ALOG("probe(%s) score %d", provider ? provider->getName() : "?", score ? (int)*score : 0);\n'
