@@ -44,7 +44,7 @@ jobs:
       - name: NVKMS kernel API header
         run: |
           git init -q ogkm && cd ogkm && git remote add origin https://github.com/NVIDIA/open-gpu-kernel-modules.git
-          git sparse-checkout set src/nvidia-modeset/kapi/interface src/common/sdk/nvidia/inc src/common/inc src/nvidia-modeset/interface src/common/unix/common/inc src/common/modeset
+          git sparse-checkout set src/nvidia-modeset/kapi/interface src/common/sdk/nvidia/inc src/common/inc src/nvidia-modeset/interface src/common/unix/common/inc src/common/modeset src/nvidia/arch/nvalloc/unix/include
           git fetch -q --depth 1 origin "$OGKM_COMMIT" && git checkout -q FETCH_HEAD
       - name: Build PVGTransport.kext
         run: |
@@ -65,7 +65,7 @@ jobs:
           SDK=$(xcrun --show-sdk-path); KHDR="$SDK/System/Library/Frameworks/Kernel.framework/Headers"; A=pome/gpu/guest/metal/accel; O=ogkm/src
           OUT=out/PVGAccel.kext/Contents; mkdir -p $OUT/MacOS
           xcrun clang++ -arch x86_64 -fapple-kext -mkernel -nostdinc -I"$KHDR" -Ipome/gpu/guest/metal -I$A -I$A/iofam -I$A/re \
-            -I$O/nvidia-modeset/kapi/interface -I$O/nvidia-modeset/interface -I$O/common/sdk/nvidia/inc -I$O/common/inc -I$O/common/unix/common/inc -I$O/common/modeset \
+            -I$O/nvidia-modeset/kapi/interface -I$O/nvidia-modeset/interface -I$O/common/sdk/nvidia/inc -I$O/common/inc -I$O/common/unix/common/inc -I$O/common/modeset -I$O/nvidia/arch/nvalloc/unix/include \
             -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT -DNMX_ACCEL -DPVG_ACCEL -DNM_TAHOE \
             -std=c++17 -fno-rtti -fno-exceptions -fno-builtin -fno-common -Wall -Wno-unused-parameter -Wno-inconsistent-missing-override -Wno-unused-function -O2 \
             -c $A/nvrm-accel.cpp -o out/pvg-accel.o

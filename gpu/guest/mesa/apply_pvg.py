@@ -60,6 +60,12 @@ def main():
         "#include <sys/socket.h>\n#ifndef SOCK_CLOEXEC\n#define SOCK_CLOEXEC 0 /* pome: Darwin */\n#endif\n")
 
     build = venus / "meson.build"
+    # ld64 cannot leave Mesa's optional (weak, hidden) entrypoints such as vk_cmd_enqueue_* undefined;
+    # KosmicKrisp (Mesa's own macOS driver) links with dynamic_lookup for the same reason.
+    replace_once(build,
+        "vn_link_args = [\n  ld_args_bsymbolic,\n  ld_args_gc_sections,\n  vulkan_icd_link_args,\n]\n",
+        "vn_link_args = [\n  ld_args_bsymbolic,\n  ld_args_gc_sections,\n  vulkan_icd_link_args,\n]\n"
+        "if host_machine.system() == 'darwin'\n  vn_link_args += '-Wl,-undefined,dynamic_lookup'\nendif\n")
     replace_once(build,
         "if not with_platform_windows\n  libvn_files += files('vn_renderer_vtest.c')",
         "if host_machine.system() == 'darwin'\n"
