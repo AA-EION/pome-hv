@@ -265,7 +265,9 @@ public:
         ALOG("populateAccelConfig(%p) — filled: AccelCaps=15, flags=0x30844300, maxtex=16384x16384, maxfb=%u written (cfg+0x2c left %u)",
              p, kNvMaxFB, *(const uint32_t *)(p + 0x2c));
     }
-    bool      configureDevice(IOPCIDevice *pci) APPLE_KEXT_OVERRIDE { ALOG("configureDevice(%p) %04x:%04x — RM owns the card (NVRM.kext); nothing to do here yet", pci, pci ? pci->configRead16(0) : 0, pci ? pci->configRead16(2) : 0); return true; }
+    bool      configureDevice(IOPCIDevice *pci) APPLE_KEXT_OVERRIDE {
+        IOPCIDevice *dev = OSDynamicCast(IOPCIDevice, pci);   // pome: PVGTransport is not a PCI device
+        ALOG("configureDevice(%p) %04x:%04x — RM owns the card (NVRM.kext); nothing to do here yet", pci, dev ? dev->configRead16(0) : 0, dev ? dev->configRead16(2) : 0); return true; }
     void      teardownDevice(IOPCIDevice *pci) APPLE_KEXT_OVERRIDE { ALOG("teardownDevice(%p)", pci); }
     OSObject *createKernelGPUTask() APPLE_KEXT_OVERRIDE { return newGPUTask("createKernelGPUTask"); }
     OSObject *newDisplayPipe() APPLE_KEXT_OVERRIDE {

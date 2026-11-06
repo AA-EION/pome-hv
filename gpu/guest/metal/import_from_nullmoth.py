@@ -108,6 +108,14 @@ def patch_plugin(plugin):
 
 def patch_accel(accel):
     src = accel / "nvrm-accel.cpp"
+    # IOGraphicsAccelerator2::start hands the provider to configureDevice() typed as IOPCIDevice. Under
+    # pome the provider is PVGTransport (a VMBus service), and reading its "PCI config" panicked Tahoe in
+    # IOPCIDevice::extendedConfigRead16. Log the IDs only for a real PCI device.
+    edit(src,
+         '    bool      configureDevice(IOPCIDevice *pci) APPLE_KEXT_OVERRIDE { ALOG("configureDevice(%p) %04x:%04x — RM owns the card (NVRM.kext); nothing to do here yet", pci, pci ? pci->configRead16(0) : 0, pci ? pci->configRead16(2) : 0); return true; }',
+         '    bool      configureDevice(IOPCIDevice *pci) APPLE_KEXT_OVERRIDE {\n'
+         '        IOPCIDevice *dev = OSDynamicCast(IOPCIDevice, pci);   // pome: PVGTransport is not a PCI device\n'
+         '        ALOG("configureDevice(%p) %04x:%04x — RM owns the card (NVRM.kext); nothing to do here yet", pci, dev ? dev->configRead16(0) : 0, dev ? dev->configRead16(2) : 0); return true; }')
     edit(src, '#ifdef NMX_ACCEL\n// NMXAccel: this accelerator built for the AMD and Intel GPUs that NMXGPU drives (see nmx_accel_names.h)\n#include "nmx_accel_names.h"\n#endif',
               '#if defined(PVG_ACCEL)\n// PVGAccel: this accelerator built for the Hyper-V virtual GPU (pome PVGTransport + Venus); see pvg_accel_names.h\n'
               '#include "pvg_accel_names.h"\n#elif defined(NMX_ACCEL)\n'
