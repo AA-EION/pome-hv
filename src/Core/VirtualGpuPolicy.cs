@@ -4,7 +4,7 @@ namespace Pome.Core;
 
 /// <summary>What pome changed to turn on the virtual GPU, so turning it off restores exactly that.</summary>
 public sealed record VirtualGpuRecord(int SchemaVersion, string OriginalBootArgs, string? OriginalCsrActiveConfig, bool AddedBootArgsDelete,
-    bool AddedCsrDelete, DateTimeOffset EnabledAt);
+    bool AddedCsrDelete, DateTimeOffset EnabledAt, bool AddedTransportKext = false);
 
 /// <summary>
 /// Experimental Pome Virtual GPU: Vulkan forwarding from a macOS 26 Tahoe guest to the host GPU
@@ -27,6 +27,11 @@ public static class VirtualGpuPolicy
     /// <summary>The guest settings NullMoth's Metal driver was validated with (its README, csr-active-config 0x0A43).</summary>
     public static readonly string[] BootArgs = ["amfi_get_out_of_my_way=0x1", "amfi=0x80", "ipc_control_port_options=0"];
     public static readonly byte[] CsrActiveConfig = [0x43, 0x0A, 0x00, 0x00];
+    /// <summary>
+    /// PVGTransport extends MacHyperVSupport, which OpenCore injects and no kernel collection on disk
+    /// holds, so kmutil cannot link it: OpenCore injects it too, right after MacHyperVSupport.
+    /// </summary>
+    public const string TransportKext = "PVGTransport.kext";
 
     public static void RequireCanEnable(VmInfo vm, VmDetails details)
     {
@@ -66,7 +71,36 @@ public static class VirtualGpuPolicy
         var deleteList = DeleteList(nvramDelete);
         var addedBootArgs = AddDelete(deleteList, "boot-args");
         var addedCsr = AddDelete(deleteList, "csr-active-config");
-        return new(1, original, originalCsr, addedBootArgs, addedCsr, DateTimeOffset.UtcNow);
+        var addedKext = AddTransportKext(config);
+        return new(1, original, originalCsr, addedBootArgs, addedCsr, DateTimeOffset.UtcNow, addedKext);
+    }
+
+    private static XElement KernelAdd(XDocument config)
+    {
+        var root = config.Root?.Element("dict") ?? throw new InvalidDataException("Expected an XML property list dictionary.");
+        return OpenCoreConfiguration.Value(Dict(root, "Kernel"), "Add", "array");
+    }
+
+    private static string BundlePath(XElement entry) =>
+        TryValue(entry, "BundlePath") is { Name.LocalName: "string" } v ? v.Value : "";
+
+    private static bool AddTransportKext(XDocument config)
+    {
+        var add = KernelAdd(config);
+        if (add.Elements("dict").Any(x => BundlePath(x) == TransportKext)) return false;
+        // OpenCore links kexts in list order: after the last MacHyperVSupport entry, which it extends.
+        var anchor = add.Elements("dict").LastOrDefault(x => BundlePath(x).StartsWith("MacHyperVSupport", StringComparison.Ordinal))
+            ?? throw new InvalidDataException("The OpenCore configuration has no MacHyperVSupport entry to attach PVGTransport to.");
+        anchor.AddAfterSelf(new XElement("dict",
+            new XElement("key", "Arch"), new XElement("string", "x86_64"),
+            new XElement("key", "BundlePath"), new XElement("string", TransportKext),
+            new XElement("key", "Comment"), new XElement("string", "Pome Virtual GPU transport (added by pome)"),
+            new XElement("key", "Enabled"), new XElement("true"),
+            new XElement("key", "ExecutablePath"), new XElement("string", "Contents/MacOS/PVGTransport"),
+            new XElement("key", "MaxKernel"), new XElement("string", ""),
+            new XElement("key", "MinKernel"), new XElement("string", "25.0.0"),
+            new XElement("key", "PlistPath"), new XElement("string", "Contents/Info.plist")));
+        return true;
     }
 
     /// <summary>Restores the boot arguments and SIP value recorded when the virtual GPU was turned on.</summary>
@@ -88,6 +122,8 @@ public static class VirtualGpuPolicy
         var deleteList = DeleteList(nvramDelete);
         if (record.AddedBootArgsDelete) deleteList.Elements("string").Where(x => x.Value == "boot-args").Remove();
         if (record.AddedCsrDelete) deleteList.Elements("string").Where(x => x.Value == "csr-active-config").Remove();
+        // Records from before the OpenCore entry existed say false; the entry is pome's either way.
+        KernelAdd(config).Elements("dict").Where(x => BundlePath(x) == TransportKext).Remove();
     }
 
     private static string Key(string arg) { var i = arg.IndexOf('='); return i < 0 ? arg : arg[..i]; }

@@ -1,4 +1,4 @@
-Import-Module Hyper-V -ErrorAction Stop
+﻿Import-Module Hyper-V -ErrorAction Stop
 $vm = Get-VM -Id ([Guid]$p.vmId) -ErrorAction Stop
 if ($p.kind -ne 'InspectVm') {
     if (-not ([string]$vm.Notes).StartsWith('pome:v1:')) { throw 'VMs created outside pome are read-only.' }
@@ -66,7 +66,7 @@ switch ($p.kind) {
         $message = 'Stopped-VM checkpoint created. Checkpoints depend on the original disks; export a separate backup for recovery.'
     }
     { $_ -in 'RestoreCheckpoint', 'DeleteCheckpoint' } {
-        $checkpoint = @(Get-VMSnapshot -VM $vm -SnapshotType Standard | Where-Object { $_.Id -eq [Guid]$p.checkpointId })
+        $checkpoint = @(Get-VMSnapshot -VM $vm | Where-Object { [string]$_.SnapshotType -eq 'Standard' -and $_.Id -eq [Guid]$p.checkpointId })
         if ($checkpoint.Count -ne 1) { throw 'This checkpoint no longer exists on the selected VM.' }
         if ($p.kind -eq 'RestoreCheckpoint') {
             Restore-VMSnapshot -VMSnapshot $checkpoint[0] -Confirm:$false
@@ -149,7 +149,8 @@ try {
         try { $capacity = [UInt64](Get-VHD -Path $disk.Path -ErrorAction Stop).Size } catch { }
         @{ path=[string]$disk.Path; capacityBytes=$capacity; controller=([string]$disk.ControllerType + ' ' + $disk.ControllerNumber + ':' + $disk.ControllerLocation) }
     })
-    $checkpoints = @(Get-VMSnapshot -VM $vm -SnapshotType Standard | Sort-Object CreationTime -Descending | ForEach-Object {
+    # Get-VMSnapshot -SnapshotType throws when a VM has none (Windows 11 build 26300); filter instead.
+    $checkpoints = @(Get-VMSnapshot -VM $vm | Where-Object { [string]$_.SnapshotType -eq 'Standard' } | Sort-Object CreationTime -Descending | ForEach-Object {
         @{ id=$_.Id.ToString(); name=$_.Name; creationTime=$_.CreationTime.ToString('o') }
     })
     $network = @(Get-VMNetworkAdapter -VM $vm)

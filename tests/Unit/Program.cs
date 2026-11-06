@@ -353,7 +353,10 @@ Test("Virtual GPU relaxes AMFI and SIP and restores exactly what it changed", ()
     Check(doc.Descendants("key").Single(x => x.Value == "csr-active-config").ElementsAfterSelf().First().Value == "QwoAAA==");
     var deletes = doc.Descendants("key").Single(x => x.Value == "Delete").ElementsAfterSelf().First();
     Check(deletes.Descendants("string").Select(x => x.Value).Order().SequenceEqual(new[] { "boot-args", "csr-active-config" }));
-    Check(record.OriginalBootArgs == before && record.OriginalCsrActiveConfig is null && record.AddedBootArgsDelete && record.AddedCsrDelete);
+    Check(record.OriginalBootArgs == before && record.OriginalCsrActiveConfig is null && record.AddedBootArgsDelete && record.AddedCsrDelete && record.AddedTransportKext);
+    string[] Bundles() => doc.Descendants("key").Where(x => x.Value == "BundlePath").Select(x => ((XElement)x.NextNode!).Value).ToArray();
+    // OpenCore links in list order: PVGTransport goes right after MacHyperVSupport, which it extends.
+    Check(Bundles().SequenceEqual(new[] { "MacHyperVSupport.kext", "PVGTransport.kext" }), string.Join(",", Bundles()));
     // Enabling twice must not duplicate flags (a retried operation).
     VirtualGpuPolicy.Enable(doc);
     Check(Arg().Split(' ').Count(x => x.StartsWith("amfi=", StringComparison.Ordinal)) == 1);
@@ -361,6 +364,7 @@ Test("Virtual GPU relaxes AMFI and SIP and restores exactly what it changed", ()
     Check(Arg() == before, Arg());
     Check(!doc.Descendants("key").Any(x => x.Value == "csr-active-config"));
     Check(!deletes.Descendants("string").Any());
+    Check(Bundles().SequenceEqual(new[] { "MacHyperVSupport.kext" }), string.Join(",", Bundles()));
     // A user's own amfi flag that existed before is kept on Disable.
     doc.Descendants("key").Single(x => x.Value == "boot-args").ElementsAfterSelf().First().Value = before + " amfi=0x1";
     var mine = VirtualGpuPolicy.Enable(doc);

@@ -35,18 +35,36 @@ try {
         # Keep the first original next to the VM; later writes never replace it.
         $backup = Join-Path $resource 'config.plist.before-virtual-gpu'
         if (-not (Test-Path -LiteralPath $backup)) { Copy-Item -LiteralPath $config -Destination $backup -ErrorAction Stop }
+        # The package goes first, so a failed copy leaves the boot configuration untouched.
+        $message = ''
+        $package = [string]$p.packageDirectory
+        $target = [IO.Path]::Combine($volume, 'PomeGPU')
+        $kext = [IO.Path]::Combine($volume, 'EFI\OC\Kexts\PVGTransport.kext')
+        # .NET file APIs accept the \\?\Volume{...}\ path; Copy-Item -Recurse does not.
+        function Copy-Tree([string]$from, [string]$to) {
+            $root = [IO.Path]::GetFullPath($from).TrimEnd('\')
+            foreach ($file in [IO.Directory]::GetFiles($root, '*', [IO.SearchOption]::AllDirectories)) {
+                $dest = [IO.Path]::Combine($to, $file.Substring($root.Length + 1))
+                [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dest))
+                [IO.File]::Copy($file, $dest, $true)
+            }
+        }
+        if ([IO.Directory]::Exists($target) -and ($p.removePackage -or $package)) { [IO.Directory]::Delete($target, $true) }
+        if ([IO.Directory]::Exists($kext) -and ($p.removePackage -or $package)) { [IO.Directory]::Delete($kext, $true) }
+        if ($package) {
+            $source = [IO.Path]::Combine($package, 'Library\Extensions\PVGTransport.kext')
+            if (-not [IO.File]::Exists([IO.Path]::Combine($package, 'install.sh')) -or -not [IO.File]::Exists([IO.Path]::Combine($source, 'Contents\Info.plist'))) {
+                throw 'The guest driver package is incomplete (install.sh or PVGTransport.kext missing).'
+            }
+            # The package goes first, so a failed copy leaves the boot configuration untouched.
+            Copy-Tree $package $target
+            Copy-Tree $source $kext
+            $message = ' PVGTransport.kext was added to EFI/OC/Kexts and the guest driver package was copied to the POME-BOOT volume (PomeGPU).'
+        }
         $staged = $config + '.pome-new'
         Copy-Item -LiteralPath $local -Destination $staged -Force -ErrorAction Stop
         Move-Item -LiteralPath $staged -Destination $config -Force -ErrorAction Stop
-        $message = 'OpenCore configuration updated.'
-        $package = [string]$p.packageDirectory
-        $target = Join-Path $volume 'PomeGPU'
-        if ($p.removePackage -and (Test-Path -LiteralPath $target)) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop }
-        if ($package -and (Test-Path -LiteralPath (Join-Path $package 'install.sh'))) {
-            if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop }
-            Copy-Item -LiteralPath $package -Destination $target -Recurse -ErrorAction Stop
-            $message += ' The guest driver package was copied to the POME-BOOT volume (PomeGPU).'
-        }
+        $message = 'OpenCore configuration updated.' + $message
     }
 } finally {
     if ($mounted) { Dismount-VHD -Path $efi -ErrorAction Stop }

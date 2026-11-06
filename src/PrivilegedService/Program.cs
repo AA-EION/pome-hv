@@ -81,12 +81,19 @@ internal static class Program
                     var vgFolder = CreationPreflight.RequireOwnedOperationFolder(vgVm, vgDetails);
                     var enable = request.Kind == OperationKind.EnableVirtualGpu;
                     if (enable) VirtualGpuPolicy.RequireCanEnable(vgVm, vgDetails); else VirtualGpuPolicy.RequireCanDisable(vgVm, vgDetails);
+                    // OpenCore must inject PVGTransport, so turning on needs the package beside pome.
+                    var package = enable ? VirtualGpuHost.LocateGuestPackage()
+                        ?? throw new InvalidDataException("The guest driver package (pvg-guest) is not installed next to pome. Build it with the macOS CI workflow first.") : null;
                     var working = Path.Combine(vgFolder, "config.plist.virtual-gpu");
                     var recordPath = Path.Combine(vgFolder, VirtualGpuPolicy.RecordFile);
                     Json.Read<OperationResult>(await runner.RunAsync("VirtualGpuMedia", new { vmId = vgVm.Id, mode = "read", configPath = working }));
                     try
                     {
                         System.Xml.Linq.XDocument config;
+                        // A failed earlier attempt may have changed the EFI copy without writing the record.
+                        // Enabling always starts from the original VirtualGpuMedia saved before its first write.
+                        var original = Path.Combine(vgFolder, "config.plist.before-virtual-gpu");
+                        if (enable && File.Exists(original)) File.Copy(original, working, true);
                         using (var input = File.OpenRead(working))
                         using (var reader = System.Xml.XmlReader.Create(input, new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Ignore, XmlResolver = null, IgnoreWhitespace = true, MaxCharactersInDocument = 2_000_000 }))
                             config = System.Xml.Linq.XDocument.Load(reader);
@@ -99,10 +106,10 @@ internal static class Program
                         var written = Json.Read<OperationResult>(await runner.RunAsync("VirtualGpuMedia", new
                         {
                             vmId = vgVm.Id, mode = "write", configPath = working,
-                            packageDirectory = enable ? VirtualGpuHost.LocateGuestPackage() : null, removePackage = !enable
+                            packageDirectory = package, removePackage = !enable
                         }));
                         if (enable) await WriteAtomicAsync(recordPath, Json.Write(record!));
-                        else File.Delete(recordPath);
+                        else { File.Delete(recordPath); File.Delete(Path.Combine(vgFolder, "config.plist.before-virtual-gpu")); }
                         var message = enable
                             ? "Virtual GPU turned on. The guest now boots with relaxed AMFI and SIP (csr-active-config 0x0A43), which the unsigned Metal layer needs. In macOS, run PomeGPU/install.sh from the POME-BOOT volume, then restart. " + written.Message
                             : "Virtual GPU turned off. The original boot arguments and SIP value were restored. " + written.Message;

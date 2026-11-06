@@ -99,6 +99,15 @@ try
             await Save("grant-access.json", result); Console.WriteLine(result.Message);
             return result.Success ? 0 : 1;
         }
+        case "virtual-gpu":
+        {
+            // pome's "Turn on/off virtual GPU" for one VM: virtual-gpu <evidence> <helper> <VM-ID> on|off
+            if (args.Length != 5 || !Guid.TryParse(args[3], out var vgId) || args[4] is not ("on" or "off"))
+                throw new ArgumentException("Usage: virtual-gpu <evidence> <helper.exe> <VM-ID> on|off");
+            var result = await broker.ExecuteAsync(new(args[4] == "on" ? OperationKind.EnableVirtualGpu : OperationKind.DisableVirtualGpu, VmId: vgId));
+            await Save($"virtual-gpu-{args[4]}.json", result); Console.WriteLine(result.Message);
+            return result.Success ? 0 : 1;
+        }
         case "start":
         {
             if (args.Length < 4 || !Guid.TryParse(args[3], out var id)) throw new ArgumentException("An exact managed VM ID is required.");

@@ -28,4 +28,12 @@ On a Windows 11 Hyper-V host, for Sequoia and Tahoe at least:
 - `sysctl hw.ncpu` inside macOS reports the configured count, `loginwindow` runs and the Hyper-V heartbeat is healthy;
 - export boot logs (**Diagnostics → Export boot logs…**) and keep them with the build's `build-info.json`.
 
+### Evidence so far
+
+- 2026-11-06, Tahoe 26.6.2 (25G83), i5-13420H host, Windows 11 Build 26300: build `3be53bf5…`
+  (run 42126666183, commits `70c88ae beeaa7e ea619ac af94973`) replaced the kexts on an installed
+  6-vCPU / 4 GB VM and `cpus=1` was removed. It booted to the setup assistant with no VMBus stall, and
+  Hyper-V reported guest run time on all six virtual processors (72–83 % each). Not yet covered: a cold
+  boot after a host restart, Sequoia, `sysctl hw.ncpu` inside macOS and the heartbeat check.
+
 When this passes, set `PinnedDriverFixesSmp = true`. Every release then uses the replacement driver, `OpenCoreConfiguration` no longer adds `cpus=1`, and the resource recommendation can return to more than two processors (`ResourcePolicy.CompatibilityCpuCount`). Existing VMs keep their old EFI until their media is rebuilt.
