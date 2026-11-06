@@ -104,6 +104,17 @@ jobs:
           ninja -C build src/virtio/vulkan/libvulkan_virtio.dylib src/virtio/vulkan/virtio_icd.x86_64.json
           mkdir -p ../out && cp build/src/virtio/vulkan/libvulkan_virtio.dylib ../out/
           python3 ../pome/gpu/guest/package/fix_icd.py build/src/virtio/vulkan/virtio_icd.x86_64.json ../out/virtio_icd.json
+      - name: Check the Venus driver loads
+        run: |
+          # Linked with -undefined dynamic_lookup, so a missing non-weak symbol only fails at load time
+          # (Tahoe: "symbol not found in flat namespace '_vtn_add_specialization_entry'"). Load it the
+          # way the Metal layer does (RTLD_NOW) and ask for the ICD entry point.
+          python3 - out/libvulkan_virtio.dylib <<'PY'
+          import ctypes, os, sys
+          lib = ctypes.CDLL(sys.argv[1], mode=os.RTLD_NOW | os.RTLD_LOCAL)
+          lib.vk_icdGetInstanceProcAddr
+          print("libvulkan_virtio.dylib loads; vk_icdGetInstanceProcAddr found")
+          PY
       - uses: actions/upload-artifact@v4
         with: { name: pvg-mesa, path: out, retention-days: 30 }
 
