@@ -8,6 +8,15 @@
 #include <kern/thread.h>
 #include <mach/kmod.h>
 
+// kmod_info names the kext and its version. Xcode generates it for kext targets; this one is built
+// with plain clang, and OpenCore refuses to inject a kext without it ("Invalid Parameter").
+// Keep the version equal to CFBundleVersion in Info.plist.
+extern "C" kern_return_t _start(kmod_info_t *ki, void *d);
+extern "C" kern_return_t _stop(kmod_info_t *ki, void *d);
+extern "C" { KMOD_EXPLICIT_DECL(org.pome.PVGTransport, "0.1.0", _start, _stop) }
+extern "C" kern_return_t _start(kmod_info_t *, void *) { return KERN_SUCCESS; }
+extern "C" kern_return_t _stop(kmod_info_t *, void *) { return KERN_SUCCESS; }
+
 OSDefineMetaClassAndStructors(PVGTransport, IOService);
 OSDefineMetaClassAndStructors(PVGUserClient, IOUserClient);
 

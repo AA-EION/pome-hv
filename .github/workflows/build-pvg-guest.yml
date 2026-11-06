@@ -71,6 +71,17 @@ jobs:
             -c $A/nvrm-accel.cpp -o out/pvg-accel.o
           xcrun clang++ -arch x86_64 -fapple-kext -nostdlib -Xlinker -kext -lkmodc++ -lkmod -lcc_kext out/pvg-accel.o -o $OUT/MacOS/PVGAccel
           cp $A/Info.plist $OUT/Info.plist
+      - name: Check kexts are loadable
+        run: |
+          set -euo pipefail
+          # OpenCore and kmutil need kmod_info (the kext's name and version); without it OpenCore
+          # reports "Prelinked injection ... Invalid Parameter" and the kext never loads.
+          for k in PVGTransport PVGAccel; do
+            bin=out/$k.kext/Contents/MacOS/$k
+            nm "$bin" | grep -q ' _kmod_info$' || { echo "::error::$k has no _kmod_info"; exit 1; }
+            otool -l "$bin" | grep -q LC_DYLD_CHAINED_FIXUPS && { echo "::error::$k uses chained fixups, which OpenCore cannot inject"; exit 1; }
+            echo "$k: kmod_info present, classic fixups"
+          done
       - uses: actions/upload-artifact@v4
         with: { name: pvg-kexts, path: 'out/*.kext', retention-days: 30 }
 
