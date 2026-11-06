@@ -85,6 +85,23 @@ public static class CreationPreflight
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) { return null; }
     }
 
+    /// <summary>The record EnableVirtualGpu wrote into the VM's pome folder, or null when the virtual GPU is off.</summary>
+    public static VirtualGpuRecord? TryReadVirtualGpuRecord(VmInfo vm, VmDetails details)
+    {
+        try
+        {
+            if (!vm.Managed || !Guid.TryParse(vm.Notes["pome:v1:".Length..], out var operation)) return null;
+            var folder = details.Disks.Select(x => Path.GetDirectoryName(x.Path)).FirstOrDefault(x => x is not null
+                && string.Equals(Path.GetFileName(x), "pome-" + operation.ToString("N"), StringComparison.OrdinalIgnoreCase));
+            if (folder is null) return null;
+            var file = Path.Combine(SafePaths.RequireLocal(folder), VirtualGpuPolicy.RecordFile);
+            if (!File.Exists(file) || new FileInfo(file).Length > 16384) return null;
+            var record = Json.Read<VirtualGpuRecord>(File.ReadAllText(file));
+            return record.SchemaVersion == 1 ? record : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) { return null; }
+    }
+
     private static void RequireVhdx(string path)
     {
         var local = SafePaths.RequireLocal(path);

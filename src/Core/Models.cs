@@ -41,7 +41,7 @@ public sealed record VmCheckpoint(Guid Id, string Name, DateTime CreationTime)
 }
 public sealed record VmDetails(Guid VmId, string Name, int CpuCount, ulong StartupMemoryBytes, string? SwitchName,
     string ConfigurationLocation, string SecureBoot, VmDisk[] Disks, VmCheckpoint[] Checkpoints, string[] BootOrder,
-    string[]? GpuPartitions = null, PartitionableGpu[]? PartitionableGpus = null, string? GuestMacOsVersion = null);
+    string[]? GpuPartitions = null, PartitionableGpu[]? PartitionableGpus = null, string? GuestMacOsVersion = null, bool VirtualGpu = false);
 public sealed record CreatePlan(int SchemaVersion, Guid OperationId, string Name, string StorageRoot, int CpuCount, int MemoryGiB,
     int DiskGiB, string? SwitchName, string EfiSource, string EfiSha256, string? RecoverySource, string? RecoverySha256,
     string MacOsVersion, bool AcceptLicense, bool AcceptGuestFirmwareChange,
@@ -49,9 +49,9 @@ public sealed record CreatePlan(int SchemaVersion, Guid OperationId, string Name
     string? RecoveryDmg = null, string? RecoveryDmgSha256 = null, string? RecoveryChunklist = null, string? RecoveryChunklistSha256 = null,
     string? HyperVDriverArchive = null, string? HyperVDriverSha256 = null,
     string? AmdPatches = null, string? AmdPatchesSha256 = null);
-public enum OperationKind { Create, Start, Shutdown, EnableHyperV, Inspect, InspectVm, Configure, Pause, Resume, Save, Checkpoint, RestoreCheckpoint, DeleteCheckpoint, RepairBoot, Export, ResizeDisk, ExportBootLogs, TurnOff, Reset, DeleteVm, GrantHyperVAccess, AddGpuPartition, RemoveGpuPartition }
+public enum OperationKind { Create, Start, Shutdown, EnableHyperV, Inspect, InspectVm, Configure, Pause, Resume, Save, Checkpoint, RestoreCheckpoint, DeleteCheckpoint, RepairBoot, Export, ResizeDisk, ExportBootLogs, TurnOff, Reset, DeleteVm, GrantHyperVAccess, AddGpuPartition, RemoveGpuPartition, EnableVirtualGpu, DisableVirtualGpu }
 public sealed record OperationRequest(OperationKind Kind, CreatePlan? Plan = null, Guid? VmId = null,
-    VmConfiguration? Configuration = null, Guid? CheckpointId = null, string? Destination = null, Guid? OperationId = null, int? DiskGiB = null, bool DeleteFiles = false, string? GpuInstancePath = null);
+    VmConfiguration? Configuration = null, Guid? CheckpointId = null, string? Destination = null, Guid? OperationId = null, int? DiskGiB = null, bool DeleteFiles = false, string? GpuInstancePath = null, bool SkipMemoryReserve = false);
 public sealed record OperationResult(bool Success, string Message, Guid? VmId = null, string? ResourceDirectory = null,
     HostInfo? Host = null, VmInfo[]? VirtualMachines = null, string? Stage = null, VmDetails? Details = null);
 public sealed record OperationMarker(Guid OperationId, string Stage, string Detail, bool Terminal, Guid? VmId, DateTimeOffset UpdatedAt);

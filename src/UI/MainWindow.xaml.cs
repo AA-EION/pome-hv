@@ -309,6 +309,8 @@ public sealed partial class MainWindow : Window
         if (kind is OperationKind.Pause or OperationKind.Resume || await Confirm($"{verb} {vm.Name}?", detail, verb))
         {
             var result = await ViewModel.ExecuteAsync(new(kind, VmId: vm.Id));
+            if (result is { Success: true } && kind is OperationKind.Start or OperationKind.Resume) ViewModel.ServeVirtualGpu(vm.Id);
+            if (result is { Success: true } && kind is OperationKind.TurnOff or OperationKind.Save) ViewModel.VirtualGpu.Stop(vm.Id);
             if (result is { Success: true } && kind == OperationKind.Start) await LaunchConsoleAsync(vm.Id);
             if (result is { Success: false }) await ShowNoticeAsync($"Could not {verb.ToLowerInvariant()} {vm.Name}", result.Message);
         }
@@ -363,6 +365,26 @@ public sealed partial class MainWindow : Window
         if (!await Confirm("Remove the GPU partition?", $"Pome removes the GPU partition from {vm.Name} and restores the memory-mapped I/O, cache and checkpoint settings it saved when attaching.", "Remove")) return;
         var result = await ViewModel.ExecuteAsync(new(OperationKind.RemoveGpuPartition, VmId: vm.Id));
         if (result is not null) await ShowNoticeAsync(result.Success ? "GPU partition removed" : "Could not remove the GPU partition", result.Message);
+    }
+    private async void EnableVirtualGpu(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedVm is not { } vm || !ViewModel.CanEnableVirtualGpu) return;
+        if (!await Confirm("Turn on the virtual GPU?",
+            $"Pome edits {vm.Name}'s OpenCore configuration and keeps the original next to the VM:\n\n" +
+            "• boot-args gain amfi_get_out_of_my_way=0x1 amfi=0x80 ipc_control_port_options=0, which turn off macOS's check of app and plug-in signatures.\n" +
+            "• System Integrity Protection is partly turned off (csr-active-config 0x0A43), so unsigned kexts load.\n" +
+            "• Windows registers the Pome Virtual GPU Hyper-V socket service (administrator).\n\n" +
+            "These lower the guest's security; use a VM without personal data. Then, in macOS, run PomeGPU/install.sh from the POME-BOOT volume. Turn off restores the original settings.", "Turn on")) return;
+        var result = await ViewModel.ExecuteAsync(new(OperationKind.EnableVirtualGpu, VmId: vm.Id));
+        if (result is not null) await ShowNoticeAsync(result.Success ? "Virtual GPU turned on" : "Could not turn on the virtual GPU", result.Message);
+    }
+    private async void DisableVirtualGpu(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedVm is not { } vm || !ViewModel.CanDisableVirtualGpu) return;
+        if (!await Confirm("Turn off the virtual GPU?", $"Pome restores {vm.Name}'s original boot arguments and SIP value and removes the driver package from POME-BOOT. Run PomeGPU/uninstall.sh in macOS first if you installed the driver, or the guest will keep trying to load it.", "Turn off")) return;
+        ViewModel.VirtualGpu.Stop(vm.Id);
+        var result = await ViewModel.ExecuteAsync(new(OperationKind.DisableVirtualGpu, VmId: vm.Id));
+        if (result is not null) await ShowNoticeAsync(result.Success ? "Virtual GPU turned off" : "Could not turn off the virtual GPU", result.Message);
     }
     private async void GrantHyperVAccess(object sender, RoutedEventArgs e)
     {

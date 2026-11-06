@@ -108,7 +108,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool CanEditSelected => CanManageSelected && Details?.VmId == SelectedVm?.Id;
     private void NotifySelection()
     {
-        foreach (var name in new[] { nameof(SelectedTitle), nameof(SelectedSummary), nameof(OwnershipSummary), nameof(CanInspectSelected), nameof(CanStartSelected), nameof(CanShutdownSelected), nameof(CanPauseSelected), nameof(CanResumeSelected), nameof(CanSaveSelected), nameof(CanTurnOffSelected), nameof(CanAddGpuPartition), nameof(CanRemoveGpuPartition), nameof(GpuPartitionSummary), nameof(CanResetSelected), nameof(CanDeleteSelected), nameof(CanOpenSelectedFolder), nameof(CanManageSelected), nameof(CanEditSelected), nameof(SelectionVisibility), nameof(EmptySelectionVisibility), nameof(DetailsVisibility), nameof(LoadDetailsVisibility), nameof(LibraryCount), nameof(SelectedCpu), nameof(SelectedMemory), nameof(SelectedUsage), nameof(SelectedNetwork), nameof(EmptyTitle), nameof(EmptyDescription) }) Changed(name);
+        foreach (var name in new[] { nameof(SelectedTitle), nameof(SelectedSummary), nameof(OwnershipSummary), nameof(CanInspectSelected), nameof(CanStartSelected), nameof(CanShutdownSelected), nameof(CanPauseSelected), nameof(CanResumeSelected), nameof(CanSaveSelected), nameof(CanTurnOffSelected), nameof(CanAddGpuPartition), nameof(CanRemoveGpuPartition), nameof(GpuPartitionSummary), nameof(CanEnableVirtualGpu), nameof(CanDisableVirtualGpu), nameof(VirtualGpuSummary), nameof(CanResetSelected), nameof(CanDeleteSelected), nameof(CanOpenSelectedFolder), nameof(CanManageSelected), nameof(CanEditSelected), nameof(SelectionVisibility), nameof(EmptySelectionVisibility), nameof(DetailsVisibility), nameof(LoadDetailsVisibility), nameof(LibraryCount), nameof(SelectedCpu), nameof(SelectedMemory), nameof(SelectedUsage), nameof(SelectedNetwork), nameof(EmptyTitle), nameof(EmptyDescription) }) Changed(name);
     }
     private void FilterMachines()
     {
@@ -125,6 +125,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void ReplaceMachines(IEnumerable<VmInfo> items)
     {
         VirtualMachines.Clear(); foreach (var vm in items) VirtualMachines.Add(vm);
+        // A VM stopped outside pome (Hyper-V Manager, guest shutdown) no longer needs its pvg-host.
+        foreach (var vm in VirtualMachines) if (vm.State is "Off" or "Saved") VirtualGpu.Stop(vm.Id);
         FilterMachines(); UpdateSuggestedName();
     }
     private void ApplyDetails(VmDetails details)
@@ -161,6 +163,36 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (PartitionableGpus.Count == 0) return "This computer reports no partitionable GPU. GPU partitioning needs Windows 11 or Server 2022+ and a GPU driver that supports GPU-P.";
             return Details.Checkpoints.Length > 0 ? "Delete this VM's checkpoints before attaching a GPU partition." : "No GPU partition attached.";
         }
+    }
+    public bool CanEnableVirtualGpu => CanEditSelected && SelectedIsTahoe && Details?.VirtualGpu == false && Details.Checkpoints.Length == 0;
+    public bool CanDisableVirtualGpu => CanEditSelected && Details?.VirtualGpu == true && Details.Checkpoints.Length == 0;
+    public string VirtualGpuSummary
+    {
+        get
+        {
+            if (Details is null) return "Load settings to see the virtual GPU.";
+            var installed = VirtualGpuHost.Locate() is not null;
+            if (Details.VirtualGpu)
+                return SelectedVm is { State: "Running" } vm
+                    ? (VirtualGpu.IsRunning(vm.Id) ? "On. pvg-host is serving this VM." : installed ? "On. pvg-host is not running; start the VM from pome to serve it." : "On, but pvg-host is not installed next to pome.")
+                    : "On. pome starts pvg-host when it starts this VM.";
+            var release = MacOsCatalog.Find(Details.GuestMacOsVersion);
+            if (release is null) return "Unavailable: pome has no record of this VM's macOS version. The virtual GPU is offered on Tahoe VMs created by this release.";
+            if (release.Darwin < VirtualGpuPolicy.MinimumDarwin) return $"Unavailable for {release.DisplayName}: the virtual GPU is limited to macOS 26 Tahoe VMs.";
+            if (Details.Checkpoints.Length > 0) return "Delete this VM's checkpoints before turning on the virtual GPU.";
+            return installed ? "Off." : "Off. pvg-host is not installed next to pome, so turning it on only prepares the guest.";
+        }
+    }
+    /// <summary>pvg-host processes for VMs whose virtual GPU is on.</summary>
+    public VirtualGpuHost VirtualGpu { get; } = new();
+    /// <summary>Starts pvg-host for a VM that pome just started, when its folder records the virtual GPU as on.</summary>
+    public void ServeVirtualGpu(Guid vmId)
+    {
+        var folder = SelectedVm?.Id == vmId ? SelectedVmFolder() : null;
+        var on = Details?.VmId == vmId ? Details.VirtualGpu : folder is not null && File.Exists(Path.Combine(folder, VirtualGpuPolicy.RecordFile));
+        if (!on) return;
+        if (VirtualGpu.Ensure(vmId) is { } problem) Report(problem);
+        Changed(nameof(VirtualGpuSummary));
     }
     public ObservableCollection<string> AvailableNetworks { get; } = [];
     public ObservableCollection<string> Gpus { get; } = [];

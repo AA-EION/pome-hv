@@ -5,7 +5,7 @@ using Pome.Infrastructure;
 // constrained elevated helper as the UI. Never accepts a PowerShell command.
 try
 {
-    if (args.Length < 3) throw new ArgumentException("Usage: Pome.BootCheck <inspect|prepare|create|start|media> <evidence-directory> <helper.exe> [--version 15] [--accept-license | --accept-guest-security | VM-ID]");
+    if (args.Length < 3) throw new ArgumentException("Usage: Pome.BootCheck <inspect|prepare|create|start|media> <evidence-directory> <helper.exe> [--version 15] [--accept-license [--name N --memory GB --cpus N --disk GB --storage DIR] | --accept-guest-security | VM-ID [--skip-memory-reserve]]");
     var output = SafePaths.RequireLocal(args[1], false); Directory.CreateDirectory(output);
     var broker = new PrivilegeBroker(SafePaths.RequireLocal(args[2]));
     async Task Save(string name, object value) => await File.WriteAllTextAsync(Path.Combine(output, name), Json.Write(value));
@@ -63,7 +63,9 @@ try
             var advice = ResourcePolicy.Recommend(host);
             var prepareRelease = MacOsCatalog.Require(Option("--version", MacOsCatalog.DefaultVersion));
             var network = host.Switches.FirstOrDefault(x => x == "Default Switch") ?? throw new InvalidDataException("No Default Switch found. Select a reviewed existing network in the UI.");
-            var preliminary = new CreatePlan(1, Guid.NewGuid(), "pome-boot-validation", output, Math.Min(4, advice.CpuCount), 8, 64, network,
+            // --name/--memory/--cpus/--disk/--storage default to the original validation VM (8 GB in <evidence>).
+            var preliminary = new CreatePlan(1, Guid.NewGuid(), Option("--name", "pome-boot-validation"), SafePaths.RequireLocal(Option("--storage", output), false),
+                int.Parse(Option("--cpus", Math.Min(4, advice.CpuCount).ToString())), int.Parse(Option("--memory", "8")), int.Parse(Option("--disk", "64")), network,
                 "pending", UpstreamAssets.HyperVEfi.Sha256, null, null, prepareRelease.Version, true, true);
             PlanValidator.RequireValid(preliminary, host, preparing: true);
             var cache = Path.Combine(output, "media");
@@ -92,8 +94,8 @@ try
         }
         case "start":
         {
-            if (args.Length != 4 || !Guid.TryParse(args[3], out var id)) throw new ArgumentException("An exact managed VM ID is required.");
-            var result = await broker.ExecuteAsync(new(OperationKind.Start, VmId: id));
+            if (args.Length < 4 || !Guid.TryParse(args[3], out var id)) throw new ArgumentException("An exact managed VM ID is required.");
+            var result = await broker.ExecuteAsync(new(OperationKind.Start, VmId: id, SkipMemoryReserve: args.Contains("--skip-memory-reserve")));
             await Save("start.json", result); Console.WriteLine(Json.Write(result));
             if (result.Success) Console.WriteLine("Running is not proof of macOS boot. Observe the console and record the actual guest stage.");
             return result.Success ? 0 : 1;

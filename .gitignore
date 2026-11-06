@@ -8,3 +8,7 @@ artifacts/
 *.db*
 .impeccable/
 **/__pycache__/
+
+# pvg-host build output (gpu/host/build-windows.ps1)
+gpu/host/out/
+gpu/guest/metal/.import/

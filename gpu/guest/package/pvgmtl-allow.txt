@@ -1,0 +1,4 @@
+# Processes that get the Pome Virtual GPU Metal device. One name per line, "*" for all, "-name" to deny.
+# WindowServer always stays on the synthetic framebuffer (the plugin refuses it for virtual GPUs).
+-WindowServer
+*

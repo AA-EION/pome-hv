@@ -337,6 +337,42 @@ Test("OpenCore compatibility boot preserves flags and replaces conflicting CPU l
     using var again = new MemoryStream(Encoding.UTF8.GetBytes(doc.ToString()));
     Check(OpenCoreConfiguration.Configure(again, MachineIdentity.Create(), CpuProfile.NativeIntel).Descendants("string").Count(x => x.Value.Contains("cpus=1")) == 1);
 });
+Test("Virtual GPU relaxes AMFI and SIP and restores exactly what it changed", () => {
+    using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist));
+    var doc = OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel);
+    string Arg() => doc.Descendants("key").Single(x => x.Value == "boot-args").ElementsAfterSelf().First().Value;
+    var before = Arg();
+    var record = VirtualGpuPolicy.Enable(doc);
+    Check(Arg() == before + " amfi_get_out_of_my_way=0x1 amfi=0x80 ipc_control_port_options=0", Arg());
+    Check(doc.Descendants("key").Single(x => x.Value == "csr-active-config").ElementsAfterSelf().First().Value == "QwoAAA==");
+    var deletes = doc.Descendants("key").Single(x => x.Value == "Delete").ElementsAfterSelf().First();
+    Check(deletes.Descendants("string").Select(x => x.Value).Order().SequenceEqual(new[] { "boot-args", "csr-active-config" }));
+    Check(record.OriginalBootArgs == before && record.OriginalCsrActiveConfig is null && record.AddedBootArgsDelete && record.AddedCsrDelete);
+    // Enabling twice must not duplicate flags (a retried operation).
+    VirtualGpuPolicy.Enable(doc);
+    Check(Arg().Split(' ').Count(x => x.StartsWith("amfi=", StringComparison.Ordinal)) == 1);
+    VirtualGpuPolicy.Disable(doc, Json.Read<VirtualGpuRecord>(Json.Write(record)));
+    Check(Arg() == before, Arg());
+    Check(!doc.Descendants("key").Any(x => x.Value == "csr-active-config"));
+    Check(!deletes.Descendants("string").Any());
+    // A user's own amfi flag that existed before is kept on Disable.
+    doc.Descendants("key").Single(x => x.Value == "boot-args").ElementsAfterSelf().First().Value = before + " amfi=0x1";
+    var mine = VirtualGpuPolicy.Enable(doc);
+    VirtualGpuPolicy.Disable(doc, mine);
+    Check(Arg() == before + " amfi=0x1", Arg());
+});
+Test("Virtual GPU is limited to managed Tahoe VMs", () => {
+    var vm = new VmInfo(Guid.NewGuid(), "t", "Off", 4, 0, 0, "pome:v1:" + Guid.NewGuid());
+    VmDetails D(string? version, bool on = false) => new(vm.Id, "t", 4, 4UL << 30, null, "C:\\x", "Off", [], [], [], GuestMacOsVersion: version, VirtualGpu: on);
+    VirtualGpuPolicy.RequireCanEnable(vm, D("26"));
+    Throws<InvalidDataException>(() => VirtualGpuPolicy.RequireCanEnable(vm, D("15")));
+    Throws<InvalidDataException>(() => VirtualGpuPolicy.RequireCanEnable(vm, D(null)));
+    Throws<InvalidDataException>(() => VirtualGpuPolicy.RequireCanEnable(vm, D("26", on: true)));
+    Throws<InvalidDataException>(() => VirtualGpuPolicy.RequireCanEnable(vm with { Notes = "" }, D("26")));
+    VirtualGpuPolicy.RequireCanDisable(vm, D("26", on: true));
+    Throws<InvalidDataException>(() => VirtualGpuPolicy.RequireCanDisable(vm, D("26")));
+    Check(VirtualGpuPolicy.ServiceId == new Guid("50564731-facb-11e6-bd58-64006a7986d3"));
+});
 Test("OpenCore preserves template and writes masked CPU profile", () => { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist)); var id = MachineIdentity.Create(); var doc = OpenCoreConfiguration.Configure(input, id, CpuProfile.CometLakeEmulation); Check(doc.ToString().Contains(id.Serial) && doc.ToString().Contains("VQYKAAAAAAAAAAAAAAAAAA==") && doc.ToString().Contains("/////wAAAAAAAAAAAAAAAA==")); });
 Test("OpenCore rejects bare-metal template", () => { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist.Replace("MacHyperVSupport.kext", "WhateverGreen.kext"))); Throws<InvalidDataException>(() => OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel)); });
 Test("OpenCore duplicate key rejected", () => { using var input = new MemoryStream(Encoding.UTF8.GetBytes(plist.Replace("<key>ROM</key>", "<key>SystemUUID</key><string/><key>ROM</key>"))); Throws<InvalidDataException>(() => OpenCoreConfiguration.Configure(input, MachineIdentity.Create(), CpuProfile.NativeIntel)); });

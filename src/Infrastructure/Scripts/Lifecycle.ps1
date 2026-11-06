@@ -6,7 +6,9 @@ switch ($p.kind) {
     'Start' {
         if ($vm.State -notin @('Off', 'Saved')) { throw 'Only an off or saved VM can be started. Refresh its current state.' }
         $free = [UInt64](Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 1024
-        if ($free -lt ([UInt64]$vm.MemoryStartup + 2GB)) { throw 'Not enough free memory to start this VM while keeping 2 GB available for Windows. Close memory-intensive apps, then retry.' }
+        # skipMemoryReserve: developer runs (Pome.BootCheck start --skip-memory-reserve) let Windows page
+        # out to make room instead of keeping 2 GB free; Hyper-V still refuses if it cannot back the VM.
+        if (-not $p.skipMemoryReserve -and $free -lt ([UInt64]$vm.MemoryStartup + 2GB)) { throw 'Not enough free memory to start this VM while keeping 2 GB available for Windows. Close memory-intensive apps, then retry.' }
         Start-VM -VM $vm -ErrorAction Stop
         $message = 'VM started.'
     }

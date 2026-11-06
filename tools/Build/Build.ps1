@@ -1,4 +1,6 @@
-param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [string]$OutputDirectory = 'artifacts/app')
+# -WithVirtualGpu also builds pvg-host and its Venus back end (gpu/host/build-windows.ps1; needs MSYS2
+# UCRT64 gcc and Visual Studio C++) into <output>/pvg-host, where pome looks for it.
+param([ValidateSet('Debug','Release')][string]$Configuration = 'Release', [string]$OutputDirectory = 'artifacts/app', [switch]$WithVirtualGpu)
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 Push-Location $root
@@ -49,6 +51,13 @@ try {
     Expand-Archive -Path $pyZip -DestinationPath $pyOut -Force
     Copy-Item -Path "$pyOut\*" -Destination $venvScripts -Include '*.exe','*.dll','*.pyd','*.zip','*._pth','*.cat' -Force
     Set-Content -Path (Join-Path $venvDir 'pyvenv.cfg') -Value "home = $venvScripts`ninclude-system-site-packages = false`nversion = 3.12.10`nexecutable = $(Join-Path $venvScripts 'python.exe')" -Encoding UTF8
+
+    if ($WithVirtualGpu) {
+        $pvg = Join-Path $output 'pvg-host'
+        & (Join-Path $root 'gpu/host/build-windows.ps1') -Out $pvg
+        if (-not (Test-Path (Join-Path $pvg 'pvg-host.exe'))) { throw 'pvg-host build failed.' }
+        Remove-Item (Join-Path $pvg 'pvg-host-tests.exe') -ErrorAction SilentlyContinue
+    }
 
     Write-Host "Built $output/Pome.UI.exe (with bundled Python venv at $venvScripts/python.exe)"
 } finally { Pop-Location }

@@ -71,6 +71,46 @@ internal static class Program
                     }));
                     return changed.Details is null ? changed : changed with { Details = WithGuest(changed.Details, gpuVm) };
                 }
+            case OperationKind.EnableVirtualGpu:
+            case OperationKind.DisableVirtualGpu:
+                {
+                    var vgVm = (await new HyperVManager(runner).ListAsync()).SingleOrDefault(x => x.Id == request.VmId)
+                        ?? throw new InvalidDataException("The selected VM no longer exists.");
+                    VmManagementPolicy.RequireAllowed(request, vgVm);
+                    var vgDetails = await InspectWithGuestAsync(runner, vgVm);
+                    var vgFolder = CreationPreflight.RequireOwnedOperationFolder(vgVm, vgDetails);
+                    var enable = request.Kind == OperationKind.EnableVirtualGpu;
+                    if (enable) VirtualGpuPolicy.RequireCanEnable(vgVm, vgDetails); else VirtualGpuPolicy.RequireCanDisable(vgVm, vgDetails);
+                    var working = Path.Combine(vgFolder, "config.plist.virtual-gpu");
+                    var recordPath = Path.Combine(vgFolder, VirtualGpuPolicy.RecordFile);
+                    Json.Read<OperationResult>(await runner.RunAsync("VirtualGpuMedia", new { vmId = vgVm.Id, mode = "read", configPath = working }));
+                    try
+                    {
+                        System.Xml.Linq.XDocument config;
+                        using (var input = File.OpenRead(working))
+                        using (var reader = System.Xml.XmlReader.Create(input, new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Ignore, XmlResolver = null, IgnoreWhitespace = true, MaxCharactersInDocument = 2_000_000 }))
+                            config = System.Xml.Linq.XDocument.Load(reader);
+                        VirtualGpuRecord? record = null;
+                        if (enable) record = VirtualGpuPolicy.Enable(config);
+                        else VirtualGpuPolicy.Disable(config, CreationPreflight.TryReadVirtualGpuRecord(vgVm, vgDetails) ?? throw new InvalidDataException("The virtual GPU record is missing; restore config.plist.before-virtual-gpu from the VM folder manually."));
+                        using (var writer = System.Xml.XmlWriter.Create(working, new System.Xml.XmlWriterSettings { Encoding = new System.Text.UTF8Encoding(false), Indent = true, NewLineChars = "\n" })) config.Save(writer);
+                        // Register the socket service before the guest can ask for it; harmless to repeat.
+                        if (enable) VirtualGpuService.Register();
+                        var written = Json.Read<OperationResult>(await runner.RunAsync("VirtualGpuMedia", new
+                        {
+                            vmId = vgVm.Id, mode = "write", configPath = working,
+                            packageDirectory = enable ? VirtualGpuHost.LocateGuestPackage() : null, removePackage = !enable
+                        }));
+                        if (enable) await WriteAtomicAsync(recordPath, Json.Write(record!));
+                        else File.Delete(recordPath);
+                        var message = enable
+                            ? "Virtual GPU turned on. The guest now boots with relaxed AMFI and SIP (csr-active-config 0x0A43), which the unsigned Metal layer needs. In macOS, run PomeGPU/install.sh from the POME-BOOT volume, then restart. " + written.Message
+                            : "Virtual GPU turned off. The original boot arguments and SIP value were restored. " + written.Message;
+                        var refreshed = await InspectWithGuestAsync(runner, vgVm);
+                        return new(true, message, vgVm.Id, Details: refreshed);
+                    }
+                    finally { File.Delete(working); }
+                }
             case OperationKind.DeleteVm:
                 {
                     var target = (await new HyperVManager(runner).ListAsync()).SingleOrDefault(x => x.Id == request.VmId)
@@ -255,7 +295,8 @@ internal static class Program
     }
 
     private static VmDetails WithGuest(VmDetails details, VmInfo vm) =>
-        details with { GuestMacOsVersion = CreationPreflight.TryReadGuestRecord(vm, details)?.MacOsVersion };
+        details with { GuestMacOsVersion = CreationPreflight.TryReadGuestRecord(vm, details)?.MacOsVersion,
+                       VirtualGpu = CreationPreflight.TryReadVirtualGpuRecord(vm, details) is not null };
 
     private static async Task<VmDetails> InspectWithGuestAsync(PowerShellRunner runner, VmInfo vm)
     {

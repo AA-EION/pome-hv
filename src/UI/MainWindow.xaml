@@ -60,6 +60,13 @@
                 <ComboBox Header="Partitionable GPU" ItemsSource="{Binding PartitionableGpus}" SelectedItem="{Binding SelectedPartitionGpu, Mode=TwoWay}" HorizontalAlignment="Stretch" IsEnabled="{Binding CanAddGpuPartition}"><ComboBox.ItemTemplate><DataTemplate x:DataType="core:PartitionableGpu"><TextBlock Text="{x:Bind Name}"/></DataTemplate></ComboBox.ItemTemplate></ComboBox>
                 <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="Attach GPU partition…" Click="AddGpuPartition" IsEnabled="{Binding CanAddGpuPartition}"/><Button Content="Remove GPU partition…" Click="RemoveGpuPartition" IsEnabled="{Binding CanRemoveGpuPartition}"/></StackPanel>
               </StackPanel>
+              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+              <StackPanel Spacing="10">
+                <TextBlock Text="Virtual GPU (experimental)" Style="{StaticResource SectionTitle}"/>
+                <TextBlock Text="{Binding VirtualGpuSummary}" TextWrapping="Wrap"/>
+                <TextBlock Text="Forwards Vulkan from macOS to this computer's GPU (any vendor) over a Hyper-V socket, and runs Metal on top of it. pome starts its host companion, pvg-host, while the VM runs. Turning it on relaxes AMFI and System Integrity Protection in the guest, because the Metal layer is not signed by Apple." Style="{StaticResource Hint}"/>
+                <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="Turn on virtual GPU…" Click="EnableVirtualGpu" IsEnabled="{Binding CanEnableVirtualGpu}"/><Button Content="Turn off virtual GPU…" Click="DisableVirtualGpu" IsEnabled="{Binding CanDisableVirtualGpu}"/></StackPanel>
+              </StackPanel>
             </StackPanel></ScrollViewer></PivotItem>
 <PivotItem Header="Storage"><ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch"><StackPanel Spacing="20" Padding="0,16,8,20">
               <StackPanel Spacing="16">

@@ -21,3 +21,20 @@ jobs:
           name: pome-windows-x64-preview
           path: artifacts/app
           retention-days: 7
+  pvg-host:
+    # Host companion for the experimental virtual GPU (gpu/host): MSVC pvg-host plus a MinGW-w64
+    # virglrenderer (Venus only). Unit tests run; --selftest needs a Vulkan GPU, which runners lack.
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: MinGW-w64 UCRT64 gcc
+        shell: pwsh
+        run: C:\msys64\usr\bin\bash.exe -lc 'pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gcc'
+      - name: Build pvg-host
+        shell: pwsh
+        run: ./gpu/host/build-windows.ps1 -Out artifacts/pvg-host -NoVenusSelfTest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pvg-host-windows-x64
+          path: artifacts/pvg-host
+          retention-days: 14
