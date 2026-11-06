@@ -3,7 +3,8 @@
  * Copyright (c) 2026 pome contributors. SPDX-License-Identifier: MIT
  */
 #include "PVGTransport.hpp"
-#include <libkern/version.h>
+// version_major/version_minor come from Lilu's kern_util.hpp (via HyperVVMBusDevice.hpp); including
+// <libkern/version.h> as well redeclares them with C linkage.
 #include <kern/thread.h>
 #include <mach/kmod.h>
 
@@ -239,7 +240,7 @@ IOReturn PVGTransport::negotiate() {
     pvg_hello hello{};
     hello.protocol_major = PVG_PROTOCOL_MAJOR; hello.protocol_minor = PVG_PROTOCOL_MINOR;
     hello.guest_page_size = PVG_PAGE_SIZE;
-    hello.guest_os_build = (uint32_t(version_major) << 16) | (uint32_t(version_minor) << 8) | uint32_t(version_revision);
+    hello.guest_os_build = (uint32_t(version_major) << 16) | (uint32_t(version_minor) << 8);
     hello.guest_driver_version = 0x00000100;
     hello.guest_features = PVG_GUEST_METAL_PLUGIN | PVG_GUEST_VENUS;
     strlcpy(hello.guest_name, "PVGTransport (macOS)", sizeof hello.guest_name);

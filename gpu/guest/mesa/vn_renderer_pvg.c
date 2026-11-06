@@ -14,6 +14,7 @@
  */
 #include <IOKit/IOKitLib.h>
 #include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -69,7 +70,11 @@ pvg_map(struct pvg *pvg, uint32_t res_id, size_t size, void *placed_addr)
 {
    mach_vm_address_t addr = (mach_vm_address_t)(uintptr_t)placed_addr;
    mach_vm_size_t mapped = 0;
-   const IOOptionBits options = placed_addr ? kIOMapFixed : kIOMapAnywhere;
+   /* VK_EXT_map_memory_placed: the app reserved this range. IOKit maps at a fixed address only
+    * into free space (no kIOMapAnywhere), so release the reservation first, as MAP_FIXED would. */
+   if (placed_addr)
+      mach_vm_deallocate(mach_task_self(), addr, size);
+   const IOOptionBits options = placed_addr ? 0 : kIOMapAnywhere;
    if (IOConnectMapMemory64(pvg->conn, res_id, mach_task_self(), &addr, &mapped, options) != KERN_SUCCESS ||
        mapped < size) {
       vn_log(pvg->instance, "pvg: mapping resource %u failed", res_id);
@@ -112,7 +117,7 @@ pvg_unref(struct pvg *pvg, uint32_t res_id)
 }
 
 static void
-pvg_range(struct pvg *pvg, uint32_t selector, uint32_t res_id, uint64_t offset, uint64_t size)
+pvg_call_range(struct pvg *pvg, uint32_t selector, uint32_t res_id, uint64_t offset, uint64_t size)
 {
    const uint64_t in[3] = { res_id, offset, size };
    pvg_call(pvg, selector, in, 3, NULL, 0, NULL, 0, NULL, NULL);
@@ -235,7 +240,7 @@ pvg_bo_map(struct vn_renderer *renderer, struct vn_renderer_bo *_bo, void *place
       bo->base.mmap_ptr = pvg_map(pvg, bo->base.res_id, bo->base.mmap_size, placed_addr);
       /* The guest copy starts with what the host holds (uploads may follow, readbacks need it). */
       if (bo->base.mmap_ptr)
-         pvg_range(pvg, PVG_UC_READ_RANGE, bo->base.res_id, 0, bo->base.mmap_size);
+         pvg_call_range(pvg, PVG_UC_READ_RANGE, bo->base.res_id, 0, bo->base.mmap_size);
    }
    return bo->base.mmap_ptr;
 }
@@ -245,7 +250,7 @@ pvg_bo_flush(struct vn_renderer *renderer, struct vn_renderer_bo *bo, VkDeviceSi
 {
    if (size == VK_WHOLE_SIZE || offset + size > bo->mmap_size)
       size = bo->mmap_size - offset;
-   pvg_range((struct pvg *)renderer, PVG_UC_WRITE_RANGE, bo->res_id, offset, size);
+   pvg_call_range((struct pvg *)renderer, PVG_UC_WRITE_RANGE, bo->res_id, offset, size);
 }
 
 static void
@@ -253,7 +258,7 @@ pvg_bo_invalidate(struct vn_renderer *renderer, struct vn_renderer_bo *bo, VkDev
 {
    if (size == VK_WHOLE_SIZE || offset + size > bo->mmap_size)
       size = bo->mmap_size - offset;
-   pvg_range((struct pvg *)renderer, PVG_UC_READ_RANGE, bo->res_id, offset, size);
+   pvg_call_range((struct pvg *)renderer, PVG_UC_READ_RANGE, bo->res_id, offset, size);
 }
 
 static int
@@ -302,7 +307,7 @@ pvg_shmem_create(struct vn_renderer *renderer, size_t size)
    }
    /* Rings, replies and feedback slots are written by the host: have it push them. */
    for (size_t off = 0; off < size; off += PVG_WATCH_CHUNK)
-      pvg_range(pvg, PVG_UC_WATCH_RANGE, res_id, off, MIN2(PVG_WATCH_CHUNK, size - off));
+      pvg_call_range(pvg, PVG_UC_WATCH_RANGE, res_id, off, MIN2(PVG_WATCH_CHUNK, size - off));
 
    struct pvg_shmem *shmem = util_sparse_array_get(&pvg->shmem_array, res_id);
    *shmem = (struct pvg_shmem){

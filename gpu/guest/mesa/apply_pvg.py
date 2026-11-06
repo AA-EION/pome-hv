@@ -54,6 +54,11 @@ def main():
         "   return result;\n"
         "#else\n   return vn_renderer_create_vtest(instance, alloc, renderer);\n#endif")
 
+    # vtest stays available on macOS as a developer fallback; Darwin has no SOCK_CLOEXEC.
+    replace_once(venus / "vn_renderer_vtest.c",
+        "#include <sys/socket.h>\n",
+        "#include <sys/socket.h>\n#ifndef SOCK_CLOEXEC\n#define SOCK_CLOEXEC 0 /* pome: Darwin */\n#endif\n")
+
     build = venus / "meson.build"
     replace_once(build,
         "if not with_platform_windows\n  libvn_files += files('vn_renderer_vtest.c')",

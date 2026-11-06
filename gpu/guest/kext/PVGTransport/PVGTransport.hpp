@@ -19,6 +19,13 @@
 #include "pvg_wire.h"
 #include "pvg_uapi.h"
 
+// IOMallocData/IOFreeData (data-only zones) arrived in the macOS 12 kernel SDK; the MacKernelSDK
+// that MacHyperVSupport builds against predates them. Plain IOMalloc/IOFree are equivalent here.
+#ifndef IOMallocData
+#define IOMallocData(size) IOMalloc(size)
+#define IOFreeData(ptr, size) IOFree((ptr), (size))
+#endif
+
 class PVGTransport : public IOService {
     OSDeclareDefaultStructors(PVGTransport);
     typedef IOService super;

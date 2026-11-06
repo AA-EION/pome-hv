@@ -321,7 +321,13 @@ AsyncTest("Interrupted download retains partial file", async () => { using var c
 Test("Zip traversal rejected before extraction", () => { var path = Path.Combine(temp, "traversal.zip"); using (var z = ZipFile.Open(path, ZipArchiveMode.Create)) { using var w = new StreamWriter(z.CreateEntry("../escape.txt").Open()); w.Write("no"); } Throws<InvalidDataException>(() => SafeArchive.Extract(path, Path.Combine(temp, "unsafe"))); Check(!File.Exists(Path.Combine(temp, "escape.txt"))); });
 Test("Zip duplicate case names rejected", () => { var path = Path.Combine(temp, "duplicate.zip"); using (var z = ZipFile.Open(path, ZipArchiveMode.Create)) { z.CreateEntry("EFI/A"); z.CreateEntry("efi/a"); } Throws<InvalidDataException>(() => SafeArchive.Extract(path, Path.Combine(temp, "duplicate"))); });
 Test("Safe zip preserves directory structure", () => { var path = Path.Combine(temp, "safe.zip"); using (var z = ZipFile.Open(path, ZipArchiveMode.Create)) { using var w = new StreamWriter(z.CreateEntry("EFI/OC/test.txt").Open()); w.Write("safe"); } var output = Path.Combine(temp, "safe"); SafeArchive.Extract(path, output); Check(File.ReadAllText(Path.Combine(output, "EFI/OC/test.txt")) == "safe"); });
-Test("Unsupported AMD auto-profile fails closed", () => Throws<NotSupportedException>(() => BootMedia.DetectIntelProfile("AuthenticAMD")));
+// AMD hosts are supported (AMD_Vanilla), so test the vendor-mismatch rule, which holds on any runner.
+Test("A recorded processor vendor that differs from this CPU fails closed", () =>
+{
+    var leaf0 = System.Runtime.Intrinsics.X86.X86Base.CpuId(0, 0);
+    var amdHost = leaf0.Ebx == 0x68747541; // "Auth"enticAMD
+    Throws<NotSupportedException>(() => BootMedia.DetectIntelProfile(amdHost ? "GenuineIntel" : "AuthenticAMD"));
+});
 Test("Automatic media requires verified recovery", () => Check(PlanValidator.Validate(Plan() with { BuildEfiFromArchive = true }).Count > 0));
 var plist = "<plist><dict><key>Kernel</key><dict><key>Add</key><array><dict><key>BundlePath</key><string>MacHyperVSupport.kext</string></dict></array><key>Quirks</key><dict><key>ProvideCurrentCpuInfo</key><false/></dict><key>Emulate</key><dict><key>Cpuid1Data</key><data/><key>Cpuid1Mask</key><data/></dict></dict><key>PlatformInfo</key><dict><key>Generic</key><dict><key>SystemProductName</key><string>old</string><key>SystemUUID</key><string/><key>SystemSerialNumber</key><string/><key>MLB</key><string/><key>ROM</key><data/></dict></dict></dict></plist>";
 plist = plist.Replace("<key>PlatformInfo</key>", "<key>NVRAM</key><dict><key>Add</key><dict><key>7C436110-AB2A-4BBB-A880-FE41995C9F82</key><dict><key>boot-args</key><string>-v keepsyms=1 cpus=8 cpus=2</string></dict></dict></dict><key>PlatformInfo</key>");
