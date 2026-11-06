@@ -12,6 +12,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <set>
 #include <vector>
 
 #ifdef _WIN32
@@ -128,13 +129,30 @@ public:
     }
 
     int CreateContext(uint32_t context_id, uint32_t capset_id, const std::string& name) override {
-        if (capset_id != kCapsetVenus || context_id == 0) return -22;   // -EINVAL
-        return api_.create_context(context_id, capset_id, static_cast<uint32_t>(name.size()), name.c_str()) ? 0 : -22;
+        if (capset_id != kCapsetVenus) { std::fprintf(stderr, "pvg: context %u '%s' asks for capset %u, only Venus (4) is served\n", context_id, name.c_str(), capset_id); return -22; }
+        if (context_id == 0) return -22;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (contexts_.count(context_id)) {
+            // The guest kext owns context ids. Reusing one means the guest has let it go (its process
+            // exited, or its CONTEXT_INIT reply was lost); the host never heard, so drop the stale one.
+            std::fprintf(stderr, "pvg: context %u reused by '%s': destroying the stale host context first\n", context_id, name.c_str());
+            api_.destroy_context(context_id);
+            contexts_.erase(context_id);
+            for (auto it = resources_.begin(); it != resources_.end();)
+                it = it->second == context_id ? resources_.erase(it) : std::next(it);
+        }
+        if (!api_.create_context(context_id, capset_id, static_cast<uint32_t>(name.size()), name.c_str())) {
+            std::fprintf(stderr, "pvg: vkr refused context %u '%s'\n", context_id, name.c_str());
+            return -5;   // -EIO
+        }
+        contexts_.insert(context_id);
+        return 0;
     }
 
     void DestroyContext(uint32_t context_id) override {
         api_.destroy_context(context_id);   // frees every resource the context still holds
         std::lock_guard<std::mutex> lock(mutex_);
+        contexts_.erase(context_id);
         for (auto it = resources_.begin(); it != resources_.end();)
             it = it->second == context_id ? resources_.erase(it) : std::next(it);
     }
@@ -199,6 +217,7 @@ private:
     bool initialized_ = false;
     std::mutex mutex_;
     std::map<uint32_t, uint32_t> resources_;   // resource id -> owning context
+    std::set<uint32_t> contexts_;
 };
 
 } // namespace

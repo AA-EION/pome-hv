@@ -85,6 +85,19 @@ void Session::OnFence(uint32_t context_id, uint32_t ring_idx, uint64_t fence_id)
     ++stats_.fences;
 }
 
+void Session::DropContext(uint32_t context_id) {
+    std::vector<uint32_t> unref;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!contexts_.erase(context_id)) return;
+        for (auto it = resources_.begin(); it != resources_.end();)
+            if (it->second.context_id == context_id) { unref.push_back(it->first); it = resources_.erase(it); } else ++it;
+    }
+    if (verbose_) std::fprintf(stderr, "pvg: dropping context %u (%zu resources)\n", context_id, unref.size());
+    for (uint32_t id : unref) renderer_->Unref(id);
+    renderer_->DestroyContext(context_id);   // also frees anything vkr still holds for it
+}
+
 bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
     const uint16_t type = h.type;
     if (!negotiated_ && type != PVG_MSG_HELLO) return SendError(h.sequence, type, kEPROTO, "HELLO must come first");
@@ -118,6 +131,8 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
         pvg_context_init c{};
         if (!Take(p, &c) || c.context_id == 0) return SendError(h.sequence, type, kEINVAL, "bad CONTEXT_INIT");
         c.debug_name[sizeof c.debug_name - 1] = 0;
+        if (verbose_) std::fprintf(stderr, "pvg: CONTEXT_INIT id %u capset %u '%s'\n", c.context_id, c.capset_id, c.debug_name);
+        DropContext(c.context_id);   // a reused id: the guest let the old context go without telling us
         const int r = renderer_->CreateContext(c.context_id, c.capset_id, c.debug_name);
         if (r) return SendError(h.sequence, type, r, r == kENODEV ? "no rendering back end on this host" : "context creation failed");
         { std::lock_guard<std::mutex> lock(state_mutex_); contexts_[c.context_id] = true; }
@@ -127,11 +142,8 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
     case PVG_MSG_CONTEXT_DESTROY: {
         pvg_context_ref c{};
         if (!Take(p, &c)) return SendError(h.sequence, type, kEINVAL, "bad CONTEXT_DESTROY");
-        renderer_->DestroyContext(c.context_id);
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        contexts_.erase(c.context_id);
-        for (auto it = resources_.begin(); it != resources_.end();)
-            if (it->second.context_id == c.context_id) { renderer_->Unref(it->first); it = resources_.erase(it); } else ++it;
+        if (verbose_) std::fprintf(stderr, "pvg: CONTEXT_DESTROY id %u\n", c.context_id);
+        DropContext(c.context_id);
         return true;
     }
     case PVG_MSG_RESOURCE_BLOB: {

@@ -334,17 +334,23 @@ IOReturn PVGTransport::getCaps(void *out, uint32_t *size) {
     return r;
 }
 
-IOReturn PVGTransport::contextInit(const pvg_uc_context_init *in, uint32_t *contextId) {
+IOReturn PVGTransport::contextInit(const pvg_uc_context_init *in, uint32_t *contextId, task_t owner) {
     IOLockLock(_lock);
     uint32_t id = 0;
-    for (uint32_t i = 1; i < kMaxContexts; ++i) if (!_contexts[i]) { id = i; _contexts[i] = true; break; }
+    for (uint32_t i = 1; i < kMaxContexts; ++i) if (!_contexts[i]) { id = i; _contexts[i] = true; _contextOwner[i] = owner; break; }
     IOLockUnlock(_lock);
     if (!id) return kIOReturnNoResources;
     pvg_context_init c{}; c.context_id = id; c.capset_id = in->capset_id; c.flags = in->flags;
     memcpy(c.debug_name, in->name, sizeof c.debug_name); c.debug_name[sizeof c.debug_name - 1] = 0;
     int32_t result = -1;
     IOReturn r = request(PVG_MSG_CONTEXT_INIT, &c, sizeof c, &result, sizeof result, nullptr);
-    if (r != kIOReturnSuccess || result != 0) { IOLockLock(_lock); _contexts[id] = false; IOLockUnlock(_lock); return r ? r : kIOReturnError; }
+    if (r != kIOReturnSuccess || result != 0) {
+        // The host may still have created it (a timed-out or interrupted wait): tell it to let go
+        // before the id is handed out again.
+        if (r != kIOReturnSuccess) { pvg_context_ref ref{id, 0}; sendMessage(PVG_MSG_CONTEXT_DESTROY, 0, 0, &ref, sizeof ref); }
+        IOLockLock(_lock); _contexts[id] = false; _contextOwner[id] = nullptr; IOLockUnlock(_lock);
+        return r ? r : kIOReturnError;
+    }
     *contextId = id;
     return kIOReturnSuccess;
 }
@@ -354,7 +360,7 @@ IOReturn PVGTransport::contextDestroy(uint32_t contextId) {
     pvg_context_ref c{contextId, 0};
     sendMessage(PVG_MSG_CONTEXT_DESTROY, 0, 0, &c, sizeof c);
     IOLockLock(_lock);
-    _contexts[contextId] = false; _nextFence[contextId] = 0;
+    _contexts[contextId] = false; _contextOwner[contextId] = nullptr; _nextFence[contextId] = 0;
     for (auto &res : _resources) if (res.id && res.contextId == contextId) {
         if (res.memory) res.memory->release();
         if (res.synced) res.synced->release();
@@ -598,4 +604,11 @@ void PVGTransport::releaseOwner(task_t owner) {
     IOLockUnlock(_lock);
     for (uint32_t i = 0; i < n; ++i) unrefBlob(ids[i]);
     IOFreeData(ids, kMaxResources * sizeof(uint32_t));
+    // Contexts too: a process that exits without vkDestroyInstance would otherwise keep its host
+    // context, and the next process given the same id would be refused.
+    uint32_t contexts[kMaxContexts]; uint32_t m = 0;   // 256 bytes: fine on the kernel stack
+    IOLockLock(_lock);
+    for (uint32_t i = 1; i < kMaxContexts; ++i) if (_contexts[i] && _contextOwner[i] == owner) contexts[m++] = i;
+    IOLockUnlock(_lock);
+    for (uint32_t i = 0; i < m; ++i) contextDestroy(contexts[i]);
 }

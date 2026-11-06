@@ -41,6 +41,8 @@ private:
     bool SendError(uint32_t sequence, uint16_t request, int32_t code, const std::string& message);
     bool Handle(const pvg_msg_header& h, std::vector<uint8_t>& payload);
     void PushWatches();
+    // Destroys a context and the resources it holds, if the session has it (no-op otherwise).
+    void DropContext(uint32_t context_id);
 
     std::unique_ptr<Stream> stream_;
     HostReport report_;

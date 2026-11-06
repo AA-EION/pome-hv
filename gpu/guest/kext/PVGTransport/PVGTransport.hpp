@@ -38,7 +38,7 @@ public:
 
     // Called by PVGUserClient. All block on the calling thread, never in interrupt context.
     IOReturn getCaps(void *out, uint32_t *size);
-    IOReturn contextInit(const pvg_uc_context_init *in, uint32_t *contextId);
+    IOReturn contextInit(const pvg_uc_context_init *in, uint32_t *contextId, task_t owner);
     IOReturn contextDestroy(uint32_t contextId);
     IOReturn createBlob(const pvg_uc_blob *in, pvg_uc_blob_reply *out, task_t owner);
     IOReturn unrefBlob(uint32_t resourceId);
@@ -92,6 +92,7 @@ private:
     PendingSignal _pending[kMaxPendingSignals] = {};
     Reply _replies[kMaxReplies] = {};
     bool _contexts[kMaxContexts] = {};
+    task_t _contextOwner[kMaxContexts] = {};   // the process that created each context (freed on close)
     pvg_uc_stats _stats = {};
 };
 

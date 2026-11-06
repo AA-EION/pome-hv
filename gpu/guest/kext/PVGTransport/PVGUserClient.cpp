@@ -61,7 +61,7 @@ IOReturn PVGUserClient::externalMethod(uint32_t selector, IOExternalMethodArgume
     case PVG_UC_CONTEXT_INIT: {
         if (a->structureInputSize != sizeof(pvg_uc_context_init) || a->scalarOutputCount < 1) return kIOReturnBadArgument;
         uint32_t id = 0;
-        IOReturn r = _transport->contextInit(static_cast<const pvg_uc_context_init *>(a->structureInput), &id);
+        IOReturn r = _transport->contextInit(static_cast<const pvg_uc_context_init *>(a->structureInput), &id, _task);
         a->scalarOutput[0] = id; a->scalarOutputCount = 1;
         return r;
     }
