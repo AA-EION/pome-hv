@@ -92,6 +92,13 @@ try
             await Save("creation.json", result); Console.WriteLine(Json.Write(result));
             return result.Success ? 0 : 1;
         }
+        case "grant-access":
+        {
+            // Same operation as the UI's "Join Hyper-V Administrators": the helper adds the signed-in user.
+            var result = await broker.ExecuteAsync(new(OperationKind.GrantHyperVAccess));
+            await Save("grant-access.json", result); Console.WriteLine(result.Message);
+            return result.Success ? 0 : 1;
+        }
         case "start":
         {
             if (args.Length < 4 || !Guid.TryParse(args[3], out var id)) throw new ArgumentException("An exact managed VM ID is required.");
