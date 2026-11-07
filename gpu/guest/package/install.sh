@@ -38,7 +38,8 @@ if [ "${1:-}" = "--check" ]; then
 fi
 
 [ "$major" -ge 26 ] || { echo "The Pome Virtual GPU targets macOS 26 Tahoe (found $(sw_vers -productVersion))."; exit 1; }
-shasum -a 256 -c "$HERE/SHA256SUMS" >/dev/null || { echo "package checksum mismatch"; exit 1; }
+# SHA256SUMS lists paths relative to the package, so check from there (not the caller's directory).
+( cd "$HERE" && shasum -a 256 -c SHA256SUMS >/dev/null ) || { echo "package checksum mismatch"; exit 1; }
 T=$(mktemp -d /var/tmp/pome-gpu.XXXXXX); trap 'rm -rf "$T"' EXIT
 
 # An earlier package put PVGTransport here; OpenCore injects it now, and kmutil cannot link it.
