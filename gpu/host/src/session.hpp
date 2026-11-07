@@ -1,11 +1,14 @@
 // Pome Virtual GPU host: one guest session. SPDX-License-Identifier: MIT
 #pragma once
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 #include "caps.hpp"
 #include "renderer.hpp"
@@ -53,6 +56,7 @@ private:
     void PushLoop();
     // Destroys a context and the resources it holds, if the session has it (no-op otherwise).
     void DropContext(uint32_t context_id);
+    static std::vector<uint8_t> CurrentBytes(const MirroredResource& res, uint64_t offset, uint64_t size);
 
     std::unique_ptr<Stream> stream_;
     HostReport report_;
@@ -60,7 +64,14 @@ private:
     bool verbose_;
     bool negotiated_ = false;
     uint32_t adapter_ = 0;
-    std::mutex write_mutex_;
+    // Outgoing messages. The reader thread must never block on a write: if it did while the guest
+    // also blocked writing to us, each side's ring would stay full (seen on Tahoe as a hung restart).
+    void WriteLoop();
+    std::mutex out_mutex_;
+    std::condition_variable out_cv_;
+    std::deque<std::vector<uint8_t>> out_;
+    size_t out_bytes_ = 0;
+    bool out_stop_ = false, out_failed_ = false;
     std::mutex state_mutex_;
     std::mutex push_mutex_;   // one push at a time, so control words never overtake data
     std::atomic<bool> stop_pushing_{false};

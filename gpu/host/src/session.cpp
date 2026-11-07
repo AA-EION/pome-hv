@@ -55,12 +55,43 @@ bool Session::Send(uint16_t type, uint32_t sequence, const void* payload, size_t
     if (total > PVG_MAX_MESSAGE) return false;
     pvg_msg_header h{PVG_MAGIC, type, 0, static_cast<uint32_t>(total), sequence};
     const size_t pad = (8 - (total % 8)) % 8;
-    static const uint8_t zeros[8] = {};
-    std::lock_guard<std::mutex> lock(write_mutex_);
-    bool ok = stream_->WriteAll(&h, sizeof h) && (!size || stream_->WriteAll(payload, size))
-           && (!tail_size || stream_->WriteAll(tail, tail_size)) && (!pad || stream_->WriteAll(zeros, pad));
-    if (ok) stats_.bytes_out += sizeof h + total + pad;
-    return ok;
+    std::vector<uint8_t> m(sizeof h + total + pad, 0);
+    std::memcpy(m.data(), &h, sizeof h);
+    if (size) std::memcpy(m.data() + sizeof h, payload, size);
+    if (tail_size) std::memcpy(m.data() + sizeof h + size, tail, tail_size);
+    {
+        std::lock_guard<std::mutex> lock(out_mutex_);
+        if (out_failed_ || out_stop_) return false;
+        out_bytes_ += m.size();
+        out_.push_back(std::move(m));
+    }
+    out_cv_.notify_one();
+    return true;
+}
+
+void Session::WriteLoop() {
+    size_t warned = 0;
+    for (;;) {
+        std::vector<uint8_t> m;
+        {
+            std::unique_lock<std::mutex> lock(out_mutex_);
+            out_cv_.wait(lock, [&] { return out_stop_ || !out_.empty(); });
+            if (out_.empty()) return;   // stopping, and everything queued was written
+            if (verbose_ && out_bytes_ > (256u << 20) && out_bytes_ > warned * 2) {
+                warned = out_bytes_;
+                std::fprintf(stderr, "pvg: %zu MiB queued for the guest\n", out_bytes_ >> 20);
+            }
+            m = std::move(out_.front());
+            out_.pop_front();
+            out_bytes_ -= m.size();
+        }
+        if (!stream_->WriteAll(m.data(), m.size())) {
+            std::lock_guard<std::mutex> lock(out_mutex_);
+            out_failed_ = true; out_.clear(); out_bytes_ = 0;
+            return;
+        }
+        stats_.bytes_out += m.size();
+    }
 }
 
 bool Session::SendError(uint32_t sequence, uint16_t request, int32_t code, const std::string& message) {
@@ -162,6 +193,12 @@ void Session::OnFence(uint32_t context_id, uint32_t ring_idx, uint64_t fence_id)
     pvg_fence f{context_id, ring_idx, fence_id};
     Send(PVG_MSG_FENCE_SIGNALED, 0, &f, sizeof f);
     ++stats_.fences;
+}
+
+std::vector<uint8_t> Session::CurrentBytes(const MirroredResource& res, uint64_t offset, uint64_t size) {
+    if (!res.mapping.host_ptr) return {};   // no host copy yet: the first push sends everything
+    auto* base = static_cast<const uint8_t*>(res.mapping.host_ptr) + offset;
+    return std::vector<uint8_t>(base, base + size);
 }
 
 void Session::DropContext(uint32_t context_id) {
@@ -284,9 +321,11 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
             if (r.size == 0 || r.size > 8) return SendError(h.sequence, type, kEINVAL, "control words are 1 to 8 bytes");
             auto& cs = it->second.controls;   // a cached shmem reused for a new ring marks again
             if (std::none_of(cs.begin(), cs.end(), [&](const MirroredResource::Watch& c) { return c.offset == r.offset; }))
-                cs.push_back({r.offset, r.size, {}});
+                cs.push_back({r.offset, r.size, CurrentBytes(it->second, r.offset, r.size)});
         } else {
-            it->second.watches.push_back({r.offset, r.size, {}});
+            // Start from what the guest already holds (it read the resource when it was created),
+            // so the first push carries only later changes, not the whole range again.
+            it->second.watches.push_back({r.offset, r.size, CurrentBytes(it->second, r.offset, r.size)});
         }
         return true;
     }
@@ -321,10 +360,15 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
 std::string Session::Run() {
     stop_pushing_ = false;
     last_activity_ns_ = NowNs();
+    { std::lock_guard<std::mutex> lock(out_mutex_); out_stop_ = false; out_failed_ = false; }
+    std::thread writer([this] { WriteLoop(); });
     std::thread pusher([this] { PushLoop(); });
     std::string reason = Serve();
     stop_pushing_ = true;
     pusher.join();
+    { std::lock_guard<std::mutex> lock(out_mutex_); out_stop_ = true; }
+    out_cv_.notify_all();
+    writer.join();
     return reason;
 }
 

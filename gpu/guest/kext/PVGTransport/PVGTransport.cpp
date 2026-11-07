@@ -408,8 +408,9 @@ IOReturn PVGTransport::createBlob(const pvg_uc_blob *in, pvg_uc_blob_reply *out,
     }
     slot->memory = memory; slot->synced = synced;
     IOLockUnlock(_lock);
-    // Venus' first look at a host-written shmem must see the host's bytes.
-    if (memory) readRange(id, 0, in->size);
+    // A new resource is zero on both sides (bzero above; the host's shmems are fresh mappings), so
+    // it is not read back here: that sent every shmem of every process twice and flooded the stream.
+    // Device memory is read when Venus maps it (pvg_bo_map), and host writes travel as watch pushes.
     out->resource_id = id; out->map_info = reply.map_info; out->size = in->size;
     return kIOReturnSuccess;
 }
