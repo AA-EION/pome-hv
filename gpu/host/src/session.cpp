@@ -129,7 +129,7 @@ void Session::DiffRange(const uint8_t* current, MirroredResource::Watch& w,
     }
 }
 
-size_t Session::PushWatches() {
+size_t Session::PushWatches(bool full) {
     // A Venus ring's head is written after the replies it covers. Reading every control word first
     // and sending it last means a guest that sees a new head also has the bytes written before it.
     std::lock_guard<std::mutex> push(push_mutex_);
@@ -147,6 +147,15 @@ size_t Session::PushWatches() {
                 std::memcpy(s.bytes.data(), base + c.offset, static_cast<size_t>(c.size));
                 snaps.push_back(s);
             }
+        }
+        if (!full) {
+            // Cheap tick: a moved head or status is what a waiting guest needs (it also means the
+            // replies before it changed); everything else waits for the next full pass.
+            bool moved = false;
+            for (auto& s : snaps)
+                if (s.control->shadow.size() != s.control->size ||
+                    std::memcmp(s.control->shadow.data(), s.bytes.data(), static_cast<size_t>(s.control->size)) != 0) { moved = true; break; }
+            if (!moved) return 0;
         }
         std::atomic_thread_fence(std::memory_order_seq_cst);
         for (auto& [id, res] : resources_) {
@@ -179,12 +188,28 @@ size_t Session::PushWatches() {
 
 void Session::PushLoop() {
     // Fast while the guest is active (it may be spinning on a ring head), slow when idle.
-    constexpr int64_t kActiveWindowNs = 250'000'000;
+    constexpr int64_t kActiveWindowNs = 250'000'000, kStatsPeriodNs = 10'000'000'000;
+    constexpr int64_t kFullPeriodNs = 4'000'000;   // feedback slots and other non-ring host writes
+    int64_t next_stats = NowNs() + kStatsPeriodNs, next_full = 0;
+    SessionStats last{};
     while (!stop_pushing_.load()) {
+        if (verbose_ && NowNs() >= next_stats) {
+            next_stats = NowNs() + kStatsPeriodNs;
+            const SessionStats s = stats_;   // racy snapshot; good enough for a progress line
+            if (s.execbuffers != last.execbuffers || s.pushes != last.pushes || s.bytes_in != last.bytes_in) {
+                std::fprintf(stderr, "pvg: stats: %llu execbuffers, %llu fences, %llu pushes, in %llu KiB, out %llu KiB\n",
+                             static_cast<unsigned long long>(s.execbuffers), static_cast<unsigned long long>(s.fences),
+                             static_cast<unsigned long long>(s.pushes), static_cast<unsigned long long>(s.bytes_in >> 10),
+                             static_cast<unsigned long long>(s.bytes_out >> 10));
+                last = s;
+            }
+        }
         const bool active = NowNs() - last_activity_ns_.load() < kActiveWindowNs;
         SleepMicros(active ? 500 : 5000);
         if (stop_pushing_.load()) break;
-        if (PushWatches()) last_activity_ns_.store(NowNs());
+        const bool full = NowNs() >= next_full;
+        if (full) next_full = NowNs() + kFullPeriodNs;
+        if (PushWatches(full)) last_activity_ns_.store(NowNs());
     }
 }
 

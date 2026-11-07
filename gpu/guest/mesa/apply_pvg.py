@@ -45,6 +45,7 @@ def main():
         "                       struct vn_renderer **renderer);\n\n"
         "/* pome: PVG mirrors shmems instead of sharing them (no-ops for other renderers). */\n"
         "void\nvn_renderer_pvg_kick(struct vn_renderer *renderer);\n\n"
+        "bool\nvn_renderer_pvg_active(const struct vn_renderer *renderer);\n\n"
         "void\nvn_renderer_pvg_ring_created(struct vn_renderer *renderer,\n"
         "                             struct vn_renderer_shmem *shmem,\n"
         "                             size_t head_offset,\n"
@@ -87,6 +88,51 @@ def main():
         "   vn_renderer_pvg_kick(ring->instance->renderer); /* pome: send the commands, then the tail */\n"
         "#endif\n"
         "   const VkRingStatusFlagsMESA status = vn_ring_load_status(ring);\n")
+    # The status word is the host's: a guest write (Venus clears ALIVE for its watchdog) travels as the
+    # whole word and can erase the host's IDLE bit. With the ALIVE resets gone the watchdog sees the
+    # host's ALIVE; a vanished host is caught by the kext, which fails every call once disconnected.
+    replace_once(ring,
+        "vn_ring_unset_status_bits(struct vn_ring *ring, uint32_t mask)\n{\n",
+        "vn_ring_unset_status_bits(struct vn_ring *ring, uint32_t mask)\n{\n"
+        "#ifdef __APPLE__\n"
+        "   if (vn_renderer_pvg_active(ring->instance->renderer))\n"
+        "      return; /* pome: host-written word, see vn_ring_pvg_nudge */\n"
+        "#endif\n")
+    # An idle vkr ring thread sleeps until vkNotifyRingMESA, which Venus sends only when it sees IDLE.
+    # Over PVG the IDLE bit reaches the guest a push later, so a submit can miss it and both sides wait
+    # forever (seen: Geekbench stuck in vkEnumeratePhysicalDevices). A waiter that keeps sleeping
+    # therefore wakes the ring itself.
+    replace_once(ring,
+        "void\nvn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)\n{\n",
+        "#ifdef __APPLE__\n"
+        "/* pome: see apply_pvg.py; at most one notify per 32 sleeping iterations */\n"
+        "static void\n"
+        "vn_ring_pvg_nudge(struct vn_ring *ring, const struct vn_relax_state *state)\n"
+        "{\n"
+        "   if (!vn_renderer_pvg_active(ring->instance->renderer) ||\n"
+        "       state->iter < (1u << state->profile.busy_wait_order) || (state->iter & 31))\n"
+        "      return;\n"
+        "   uint32_t data[8];\n"
+        "   struct vn_cs_encoder enc = VN_CS_ENCODER_INITIALIZER_LOCAL(data, sizeof(data));\n"
+        "   vn_encode_vkNotifyRingMESA(&enc, 0, ring->id, ring->cur, 0);\n"
+        "   vn_renderer_submit_simple(ring->instance->renderer, data, vn_cs_encoder_get_len(&enc));\n"
+        "}\n"
+        "#endif\n\n"
+        "void\nvn_ring_wait_seqno(struct vn_ring *ring, uint32_t seqno)\n{\n")
+    replace_once(ring,
+        "      vn_relax(&relax_state);\n   } while (true);\n}\n",
+        "      vn_relax(&relax_state);\n"
+        "#ifdef __APPLE__\n"
+        "      vn_ring_pvg_nudge(ring, &relax_state);\n"
+        "#endif\n"
+        "   } while (true);\n}\n")
+    replace_once(ring,
+        "         vn_relax(&relax_state);\n         if (vn_ring_has_space(ring, size, &head)) {\n",
+        "         vn_relax(&relax_state);\n"
+        "#ifdef __APPLE__\n"
+        "         vn_ring_pvg_nudge(ring, &relax_state);\n"
+        "#endif\n"
+        "         if (vn_ring_has_space(ring, size, &head)) {\n")
     replace_once(venus / "vn_common.c",
         "   state->warn = false;\n",
         "   state->warn = false;\n"

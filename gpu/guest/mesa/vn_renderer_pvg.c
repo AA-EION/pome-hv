@@ -531,6 +531,12 @@ vn_renderer_create_pvg(struct vn_instance *instance, const VkAllocationCallbacks
  * memory both sides see; here each side holds a copy, so guest writes travel when flushed and the
  * host pushes its own. Both are no-ops for other renderers (VN_DEBUG=vtest). */
 
+bool
+vn_renderer_pvg_active(const struct vn_renderer *renderer)
+{
+   return renderer && renderer->ops.submit == pvg_submit;
+}
+
 void
 vn_renderer_pvg_kick(struct vn_renderer *renderer)
 {

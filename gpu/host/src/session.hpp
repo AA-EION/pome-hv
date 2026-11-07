@@ -51,7 +51,8 @@ private:
     bool Handle(const pvg_msg_header& h, std::vector<uint8_t>& payload);
     std::string Serve();
     // Sends what the host changed in watched ranges; returns the number of messages sent.
-    size_t PushWatches();
+    // full = false only checks control words and diffs the rest when one of them moved.
+    size_t PushWatches(bool full = true);
     // Pushes on its own so ring heads and statuses reach the guest while it only waits.
     void PushLoop();
     // Destroys a context and the resources it holds, if the session has it (no-op otherwise).
