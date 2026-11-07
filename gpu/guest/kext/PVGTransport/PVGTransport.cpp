@@ -40,11 +40,12 @@ bool PVGTransport::start(IOService *provider) {
     _device = OSDynamicCast(HyperVVMBusDevice, provider);
     if (!_device) { PVGLOG("provider is not a VMBus device"); return false; }
     _device->retain();
-    _lock = IOLockAlloc(); _sendLock = IOLockAlloc();
+    _lock = IOLockAlloc(); _sendLock = IOLockAlloc(); _flushLock = IOLockAlloc();
+    _controlSnaps = static_cast<ControlSnap *>(IOMallocData(kMaxControlSnaps * sizeof(ControlSnap)));
     _rxCapacity = kRxCapacity;
     _rxBuffer = static_cast<uint8_t *>(IOMallocData(_rxCapacity));
     _txPacket = static_cast<uint8_t *>(IOMallocData(sizeof(VMPipeHeader) + kPacketPayload));
-    if (!_lock || !_sendLock || !_rxBuffer || !_txPacket) { PVGLOG("allocation failed"); return false; }
+    if (!_lock || !_sendLock || !_flushLock || !_controlSnaps || !_rxBuffer || !_txPacket) { PVGLOG("allocation failed"); return false; }
 
     if (_device->installPacketActions(this, &PVGTransport::packetReady, nullptr, 32 * 1024) != kIOReturnSuccess ||
         _device->openVMBusChannel(kRingBytes, kRingBytes) != kIOReturnSuccess) {
@@ -91,6 +92,8 @@ void PVGTransport::free() {
     if (_txPacket) IOFreeData(_txPacket, sizeof(VMPipeHeader) + kPacketPayload);
     if (_lock) IOLockFree(_lock);
     if (_sendLock) IOLockFree(_sendLock);
+    if (_flushLock) IOLockFree(_flushLock);
+    if (_controlSnaps) IOFreeData(_controlSnaps, kMaxControlSnaps * sizeof(ControlSnap));
     if (_device) _device->release();
     super::free();
 }
@@ -453,15 +456,21 @@ IOReturn PVGTransport::writeRange(uint32_t resourceId, uint64_t offset, uint64_t
 // Sends the 64-byte granules where the guest copy differs from the agreed copy, coalesced into spans.
 // Each byte of a Venus shmem has one writer (guest: commands, tail; host: head, status, replies), so
 // bytes the host pushed are already in the agreed copy and are never sent back.
-IOReturn PVGTransport::sendDiff(uint32_t resourceId, const uint8_t *current, uint8_t *synced, uint64_t size) {
+IOReturn PVGTransport::sendDiff(uint32_t resourceId, const uint8_t *current, uint8_t *synced, uint64_t size,
+                               uint32_t controlCount, const uint32_t *controlOffset) {
     constexpr uint64_t granule = 64;
+    // Control words travel last, from their snapshot (flushMirrors): skip their granules here.
+    auto isControl = [&](uint64_t at) {
+        for (uint32_t c = 0; c < controlCount; ++c) if (controlOffset[c] / granule == at / granule) return true;
+        return false;
+    };
     IOReturn status = kIOReturnSuccess;
     uint64_t pos = 0;
     while (pos < size && status == kIOReturnSuccess) {
         const uint64_t len = (size - pos) < granule ? (size - pos) : granule;
-        if (!memcmp(current + pos, synced + pos, static_cast<size_t>(len))) { pos += len; continue; }
+        if (isControl(pos) || !memcmp(current + pos, synced + pos, static_cast<size_t>(len))) { pos += len; continue; }
         uint64_t end = pos + len;
-        while (end < size && end - pos < kRangeChunk) {
+        while (end < size && end - pos < kRangeChunk && !isControl(end)) {
             const uint64_t l2 = (size - end) < granule ? (size - end) : granule;
             if (!memcmp(current + end, synced + end, static_cast<size_t>(l2))) break;
             end += l2;
@@ -475,19 +484,59 @@ IOReturn PVGTransport::sendDiff(uint32_t resourceId, const uint8_t *current, uin
 }
 
 IOReturn PVGTransport::flushMirrors(task_t owner) {
-    // Venus calls this before every submit, so the host sees ring contents and coherent writes.
+    // Venus calls this before every submit and while it waits on a ring, so the host sees ring
+    // contents and coherent writes. Order matters: a ring tail must never reach the host ahead of the
+    // commands it covers. Control words are therefore read first (snapshot), everything else is sent,
+    // and the snapshots go last. A command written after the snapshot simply waits for the next flush.
+    IOLockLock(_flushLock);
+    uint32_t snaps = 0;
+    IOLockLock(_lock);
+    for (uint32_t i = 0; i < kMaxResources; ++i) {
+        const Resource &r = _resources[i];
+        if (!r.id || r.owner != owner || !r.synced || !r.memory) continue;
+        const auto *bytes = static_cast<const uint8_t *>(r.memory->getBytesNoCopy());
+        for (uint32_t c = 0; c < r.controlCount && snaps < kMaxControlSnaps; ++c) {
+            ControlSnap &s = _controlSnaps[snaps++];
+            s.resourceId = r.id; s.offset = r.controlOffset[c]; s.size = r.controlSize[c];
+            memcpy(s.bytes, bytes + s.offset, s.size);
+        }
+    }
+    IOLockUnlock(_lock);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);   // the snapshot is ordered before the data reads below
+
     IOReturn status = kIOReturnSuccess;
     for (uint32_t i = 0; i < kMaxResources && status == kIOReturnSuccess; ++i) {
         IOLockLock(_lock);
         Resource *r = &_resources[i];
         if (!r->id || r->owner != owner || !r->synced || !r->memory) { IOLockUnlock(_lock); continue; }
         const uint32_t id = r->id; const uint64_t size = r->size;
+        const uint32_t controls = r->controlCount; uint32_t controlOffset[kMaxControls];
+        memcpy(controlOffset, r->controlOffset, sizeof controlOffset);
         IOBufferMemoryDescriptor *memory = r->memory, *synced = r->synced;
         memory->retain(); synced->retain();
         IOLockUnlock(_lock);
-        status = sendDiff(id, static_cast<const uint8_t *>(memory->getBytesNoCopy()), static_cast<uint8_t *>(synced->getBytesNoCopy()), size);
+        status = sendDiff(id, static_cast<const uint8_t *>(memory->getBytesNoCopy()), static_cast<uint8_t *>(synced->getBytesNoCopy()), size,
+                          controls, controlOffset);
         memory->release(); synced->release();
     }
+
+    for (uint32_t k = 0; k < snaps && status == kIOReturnSuccess; ++k) {
+        const ControlSnap &s = _controlSnaps[k];
+        IOLockLock(_lock);
+        Resource *r = findResource(s.resourceId);
+        IOBufferMemoryDescriptor *synced = (r && r->synced) ? r->synced : nullptr;
+        if (synced) synced->retain();
+        IOLockUnlock(_lock);
+        if (!synced) continue;
+        auto *agreed = static_cast<uint8_t *>(synced->getBytesNoCopy()) + s.offset;
+        if (memcmp(agreed, s.bytes, s.size)) {
+            memcpy(agreed, s.bytes, s.size);
+            pvg_range rg{s.resourceId, 0, s.offset, s.size};
+            status = sendMessage(PVG_MSG_WRITE_RANGE, 0, 0, &rg, sizeof rg, s.bytes, s.size);
+        }
+        synced->release();
+    }
+    IOLockUnlock(_flushLock);
     return status;
 }
 
@@ -504,6 +553,29 @@ IOReturn PVGTransport::readRange(uint32_t resourceId, uint64_t offset, uint64_t 
 
 IOReturn PVGTransport::watchRange(uint32_t resourceId, uint64_t offset, uint64_t size) {
     pvg_range rg{resourceId, 0, offset, size};
+    return sendMessage(PVG_MSG_WATCH_RANGE, 0, 0, &rg, sizeof rg);
+}
+
+IOReturn PVGTransport::markControl(uint32_t resourceId, uint64_t offset, uint64_t size, task_t owner) {
+    if (!size || size > kMaxControlSize) return kIOReturnBadArgument;
+    IOLockLock(_lock);
+    Resource *r = findResource(resourceId);
+    IOReturn status = kIOReturnSuccess;
+    if (!r || r->owner != owner || !r->synced) status = kIOReturnNotFound;
+    else if (offset + size > r->size || offset / 64 != (offset + size - 1) / 64) status = kIOReturnBadArgument;
+    else if ([&] { for (uint32_t c = 0; c < r->controlCount; ++c) if (r->controlOffset[c] == offset) return true; return false; }()) {
+        IOLockUnlock(_lock); return kIOReturnSuccess;   // a cached shmem reused for a new ring
+    }
+    else if (r->controlCount >= kMaxControls) status = kIOReturnNoResources;
+    else {
+        r->controlOffset[r->controlCount] = static_cast<uint32_t>(offset);
+        r->controlSize[r->controlCount] = static_cast<uint8_t>(size);
+        r->controlCount++;
+    }
+    IOLockUnlock(_lock);
+    if (status != kIOReturnSuccess) return status;
+    // The host orders its pushes the same way: control words read first and sent last.
+    pvg_range rg{resourceId, PVG_RANGE_CONTROL, offset, size};
     return sendMessage(PVG_MSG_WATCH_RANGE, 0, 0, &rg, sizeof rg);
 }
 

@@ -43,6 +43,13 @@ def main():
         "VkResult\nvn_renderer_create_pvg(struct vn_instance *instance,\n"
         "                       const VkAllocationCallbacks *alloc,\n"
         "                       struct vn_renderer **renderer);\n\n"
+        "/* pome: PVG mirrors shmems instead of sharing them (no-ops for other renderers). */\n"
+        "void\nvn_renderer_pvg_kick(struct vn_renderer *renderer);\n\n"
+        "void\nvn_renderer_pvg_ring_created(struct vn_renderer *renderer,\n"
+        "                             struct vn_renderer_shmem *shmem,\n"
+        "                             size_t head_offset,\n"
+        "                             size_t tail_offset,\n"
+        "                             size_t status_offset);\n\n"
         "static inline VkResult\nvn_renderer_create(struct vn_instance *instance,")
     # macOS guests of Hyper-V: the kext transport first, vtest (developer socket) as fallback.
     replace_once(header,
@@ -58,6 +65,35 @@ def main():
     replace_once(venus / "vn_renderer_vtest.c",
         "#include <sys/socket.h>\n",
         "#include <sys/socket.h>\n#ifndef SOCK_CLOEXEC\n#define SOCK_CLOEXEC 0 /* pome: Darwin */\n#endif\n")
+
+    # PVG has no memory shared with the host: the kext mirrors shmems and sends guest writes when
+    # flushed. Venus assumes a shared ring, so (1) the ring's head/tail/status are marked as control
+    # words, which both sides read first and send last (a tail never overtakes its commands, a head
+    # never overtakes its replies), (2) a new tail is flushed at once, and (3) every sleeping ring wait
+    # flushes, which also carries the ALIVE resets the watchdog depends on. Without (3) the host never
+    # sees the reset, the watchdog expires and vn_relax aborts the process (loginwindow included).
+    ring = venus / "vn_ring.c"
+    replace_once(ring,
+        "   ring->shared.extra = (char *)shared + layout->extra_offset;\n",
+        "   ring->shared.extra = (char *)shared + layout->extra_offset;\n"
+        "#ifdef __APPLE__\n"
+        "   vn_renderer_pvg_ring_created(instance->renderer, ring->shmem, layout->head_offset,\n"
+        "                                layout->tail_offset, layout->status_offset); /* pome */\n"
+        "#endif\n")
+    replace_once(ring,
+        "   vn_ring_store_tail(ring);\n   const VkRingStatusFlagsMESA status = vn_ring_load_status(ring);\n",
+        "   vn_ring_store_tail(ring);\n"
+        "#ifdef __APPLE__\n"
+        "   vn_renderer_pvg_kick(ring->instance->renderer); /* pome: send the commands, then the tail */\n"
+        "#endif\n"
+        "   const VkRingStatusFlagsMESA status = vn_ring_load_status(ring);\n")
+    replace_once(venus / "vn_common.c",
+        "   state->warn = false;\n",
+        "   state->warn = false;\n"
+        "#ifdef __APPLE__\n"
+        "   if (state->instance)\n"
+        "      vn_renderer_pvg_kick(state->instance->renderer); /* pome: tails and ALIVE resets */\n"
+        "#endif\n")
 
     build = venus / "meson.build"
     # ld64 cannot leave Mesa's optional (weak, hidden) entrypoints such as vk_cmd_enqueue_* undefined;

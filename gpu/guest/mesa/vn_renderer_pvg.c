@@ -524,3 +524,35 @@ vn_renderer_create_pvg(struct vn_instance *instance, const VkAllocationCallbacks
       vn_log(instance, "pvg backend initialized (Hyper-V)");
    return VK_SUCCESS;
 }
+
+/* ---------------------------------------------------------------- ring hooks
+ *
+ * Called from vn_ring.c and vn_relax (patched by apply_pvg.py). Venus expects the ring to live in
+ * memory both sides see; here each side holds a copy, so guest writes travel when flushed and the
+ * host pushes its own. Both are no-ops for other renderers (VN_DEBUG=vtest). */
+
+void
+vn_renderer_pvg_kick(struct vn_renderer *renderer)
+{
+   if (!renderer || renderer->ops.submit != pvg_submit)
+      return;
+   struct pvg *pvg = (struct pvg *)renderer;
+   mtx_lock(&pvg->mutex);
+   pvg_call(pvg, PVG_UC_FLUSH_MIRRORS, NULL, 0, NULL, 0, NULL, 0, NULL, NULL);
+   mtx_unlock(&pvg->mutex);
+}
+
+void
+vn_renderer_pvg_ring_created(struct vn_renderer *renderer, struct vn_renderer_shmem *shmem, size_t head_offset,
+                             size_t tail_offset, size_t status_offset)
+{
+   if (!renderer || renderer->ops.submit != pvg_submit || !shmem)
+      return;
+   struct pvg *pvg = (struct pvg *)renderer;
+   const size_t offsets[] = { head_offset, tail_offset, status_offset };
+   for (uint32_t i = 0; i < ARRAY_SIZE(offsets); i++) {
+      const uint64_t in[3] = { shmem->res_id, offsets[i], sizeof(uint32_t) };
+      if (pvg_call(pvg, PVG_UC_MARK_CONTROL, in, 3, NULL, 0, NULL, 0, NULL, NULL) != KERN_SUCCESS)
+         vn_log(pvg->instance, "pvg: marking ring word at %zu of resource %u failed", offsets[i], shmem->res_id);
+   }
+}

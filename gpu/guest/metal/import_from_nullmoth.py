@@ -131,6 +131,9 @@ def patch_accel(accel):
     edit(src, '    sysctl_register_oid(&sysctl__debug_nmxaccel_headless);\n',
               '#if defined(PVG_ACCEL)\n    sysctl_register_oid(&sysctl__debug_pvgaccel_headless);\n#else\n'
               '    sysctl_register_oid(&sysctl__debug_nmxaccel_headless);\n#endif\n')
+    # The log named NullMoth's plugin; the property is pome's (see Info.plist).
+    edit(src, 'registerService(); ALOG("registerService() called — Metal can now find MetalPluginName=%s", "NVMTLDriver");',
+              'registerService(); ALOG("registerService() called — Metal can now find the plugin named by MetalPluginName");')
     # Probe: the provider is pome's transport, not a PCI GPU.
     edit(src, '        ALOG("probe(%s) score %d", provider ? provider->getName() : "?", score ? (int)*score : 0);',
               '        ALOG("probe(%s) score %d", provider ? provider->getName() : "?", score ? (int)*score : 0);\n'

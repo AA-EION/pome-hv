@@ -30,6 +30,8 @@ enum pvg_uc_selector {
     PVG_UC_WAIT,                /* in struct pvg_uc_wait; returns kIOReturnTimeout on timeout */
     PVG_UC_GET_STATS,           /* out struct pvg_uc_stats */
     PVG_UC_FLUSH_MIRRORS,       /* send every byte this client changed in mirrored resources since the last sync */
+    PVG_UC_MARK_CONTROL,        /* in scalars: resource_id, offset, size: a control word (PVG_RANGE_CONTROL) of a
+                                   mirrored resource, read first and sent last by FLUSH_MIRRORS and by the host */
     PVG_UC_SELECTOR_COUNT
 };
 

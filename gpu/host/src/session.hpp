@@ -1,5 +1,6 @@
 // Pome Virtual GPU host: one guest session. SPDX-License-Identifier: MIT
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -21,6 +22,9 @@ struct MirroredResource {
     BlobMapping mapping;
     struct Watch { uint64_t offset, size; std::vector<uint8_t> shadow; };
     std::vector<Watch> watches;
+    // Control words (PVG_RANGE_CONTROL, e.g. a Venus ring's head and status): read before and sent
+    // after every other watched byte, and skipped by the ordinary watches.
+    std::vector<Watch> controls;
 };
 
 class Session {
@@ -33,14 +37,20 @@ public:
     void OnFence(uint32_t context_id, uint32_t ring_idx, uint64_t fence_id);
 
     // Exposed for tests: diff a watched range and append changed spans to out (offset, bytes).
+    // Granules holding one of the skip offsets (control words) are left out.
     static void DiffRange(const uint8_t* current, MirroredResource::Watch& watch,
-                          std::vector<std::pair<uint64_t, std::vector<uint8_t>>>& out, size_t granule = 64);
+                          std::vector<std::pair<uint64_t, std::vector<uint8_t>>>& out, size_t granule = 64,
+                          const std::vector<MirroredResource::Watch>* skip = nullptr);
 
 private:
     bool Send(uint16_t type, uint32_t sequence, const void* payload, size_t size, const void* tail = nullptr, size_t tail_size = 0);
     bool SendError(uint32_t sequence, uint16_t request, int32_t code, const std::string& message);
     bool Handle(const pvg_msg_header& h, std::vector<uint8_t>& payload);
-    void PushWatches();
+    std::string Serve();
+    // Sends what the host changed in watched ranges; returns the number of messages sent.
+    size_t PushWatches();
+    // Pushes on its own so ring heads and statuses reach the guest while it only waits.
+    void PushLoop();
     // Destroys a context and the resources it holds, if the session has it (no-op otherwise).
     void DropContext(uint32_t context_id);
 
@@ -52,6 +62,9 @@ private:
     uint32_t adapter_ = 0;
     std::mutex write_mutex_;
     std::mutex state_mutex_;
+    std::mutex push_mutex_;   // one push at a time, so control words never overtake data
+    std::atomic<bool> stop_pushing_{false};
+    std::atomic<int64_t> last_activity_ns_{0};
     std::map<uint32_t, MirroredResource> resources_;
     std::map<uint32_t, bool> contexts_;
     SessionStats stats_;

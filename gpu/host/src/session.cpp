@@ -1,7 +1,20 @@
 // Pome Virtual GPU host: one guest session. SPDX-License-Identifier: MIT
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 #include "session.hpp"
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 namespace pvg {
 namespace {
@@ -10,6 +23,25 @@ template <typename T> bool Take(const std::vector<uint8_t>& p, T* out, size_t at
     if (p.size() < at + sizeof(T)) return false;
     std::memcpy(out, p.data() + at, sizeof(T));
     return true;
+}
+int64_t NowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Windows rounds ordinary sleeps up to the timer tick (often 15.6 ms); the high-resolution
+// waitable timer (Windows 10 1803+) gives sub-millisecond waits without raising the system tick.
+void SleepMicros(unsigned us) {
+#ifdef _WIN32
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+    static thread_local HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    if (timer) {
+        LARGE_INTEGER due; due.QuadPart = -static_cast<LONGLONG>(us) * 10;   // relative, 100 ns units
+        if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE) && WaitForSingleObject(timer, INFINITE) == WAIT_OBJECT_0) return;
+    }
+#endif
+    std::this_thread::sleep_for(std::chrono::microseconds(us));
 }
 } // namespace
 
@@ -39,15 +71,22 @@ bool Session::SendError(uint32_t sequence, uint16_t request, int32_t code, const
 }
 
 void Session::DiffRange(const uint8_t* current, MirroredResource::Watch& w,
-                        std::vector<std::pair<uint64_t, std::vector<uint8_t>>>& out, size_t granule) {
+                        std::vector<std::pair<uint64_t, std::vector<uint8_t>>>& out, size_t granule,
+                        const std::vector<MirroredResource::Watch>* skip) {
     if (w.shadow.size() != w.size) w.shadow.assign(static_cast<size_t>(w.size), 0xCD); // first push sends everything
+    auto skipped = [&](uint64_t pos) {
+        if (!skip) return false;
+        const uint64_t lo = w.offset + pos, hi = lo + granule;
+        for (const auto& c : *skip) if (c.offset < hi && c.offset + c.size > lo) return true;
+        return false;
+    };
     uint64_t pos = 0;
     while (pos < w.size) {
         const size_t len = static_cast<size_t>(std::min<uint64_t>(granule, w.size - pos));
-        if (std::memcmp(current + w.offset + pos, w.shadow.data() + pos, len) == 0) { pos += len; continue; }
+        if (skipped(pos) || std::memcmp(current + w.offset + pos, w.shadow.data() + pos, len) == 0) { pos += len; continue; }
         // Coalesce consecutive dirty granules into one span.
         uint64_t end = pos + len;
-        while (end < w.size) {
+        while (end < w.size && !skipped(end)) {
             const size_t l2 = static_cast<size_t>(std::min<uint64_t>(granule, w.size - end));
             if (std::memcmp(current + w.offset + end, w.shadow.data() + end, l2) == 0) break;
             end += l2;
@@ -59,23 +98,63 @@ void Session::DiffRange(const uint8_t* current, MirroredResource::Watch& w,
     }
 }
 
-void Session::PushWatches() {
-    std::vector<std::pair<uint32_t, std::vector<std::pair<uint64_t, std::vector<uint8_t>>>>> pending;
+size_t Session::PushWatches() {
+    // A Venus ring's head is written after the replies it covers. Reading every control word first
+    // and sending it last means a guest that sees a new head also has the bytes written before it.
+    std::lock_guard<std::mutex> push(push_mutex_);
+    using Spans = std::vector<std::pair<uint64_t, std::vector<uint8_t>>>;
+    std::vector<std::pair<uint32_t, Spans>> data, control;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
+        struct Snap { uint32_t id; MirroredResource::Watch* control; std::array<uint8_t, 8> bytes; };
+        std::vector<Snap> snaps;
+        for (auto& [id, res] : resources_) {
+            if (!res.mapping.host_ptr) continue;
+            auto* base = static_cast<const uint8_t*>(res.mapping.host_ptr);
+            for (auto& c : res.controls) {
+                Snap s{id, &c, {}};
+                std::memcpy(s.bytes.data(), base + c.offset, static_cast<size_t>(c.size));
+                snaps.push_back(s);
+            }
+        }
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         for (auto& [id, res] : resources_) {
             if (!res.mapping.host_ptr || res.watches.empty()) continue;
-            std::vector<std::pair<uint64_t, std::vector<uint8_t>>> spans;
-            for (auto& w : res.watches) DiffRange(static_cast<const uint8_t*>(res.mapping.host_ptr), w, spans);
-            if (!spans.empty()) pending.emplace_back(id, std::move(spans));
+            Spans spans;
+            for (auto& w : res.watches)
+                DiffRange(static_cast<const uint8_t*>(res.mapping.host_ptr), w, spans, 64, res.controls.empty() ? nullptr : &res.controls);
+            if (!spans.empty()) data.emplace_back(id, std::move(spans));
+        }
+        for (auto& s : snaps) {
+            auto& c = *s.control;
+            const size_t n = static_cast<size_t>(c.size);
+            if (c.shadow.size() == n && std::memcmp(c.shadow.data(), s.bytes.data(), n) == 0) continue;
+            c.shadow.assign(s.bytes.begin(), s.bytes.begin() + n);
+            Spans one;
+            one.emplace_back(c.offset, std::vector<uint8_t>(s.bytes.begin(), s.bytes.begin() + n));
+            control.emplace_back(s.id, std::move(one));
         }
     }
-    for (auto& [id, spans] : pending)
-        for (auto& [offset, bytes] : spans) {
-            pvg_range r{}; r.resource_id = id; r.offset = offset; r.size = bytes.size();
-            Send(PVG_MSG_RANGE_DATA, 0, &r, sizeof r, bytes.data(), bytes.size());
-            ++stats_.pushes;
-        }
+    size_t sent = 0;
+    for (auto* batch : {&data, &control})
+        for (auto& [id, spans] : *batch)
+            for (auto& [offset, bytes] : spans) {
+                pvg_range r{}; r.resource_id = id; r.offset = offset; r.size = bytes.size();
+                Send(PVG_MSG_RANGE_DATA, 0, &r, sizeof r, bytes.data(), bytes.size());
+                ++stats_.pushes; ++sent;
+            }
+    return sent;
+}
+
+void Session::PushLoop() {
+    // Fast while the guest is active (it may be spinning on a ring head), slow when idle.
+    constexpr int64_t kActiveWindowNs = 250'000'000;
+    while (!stop_pushing_.load()) {
+        const bool active = NowNs() - last_activity_ns_.load() < kActiveWindowNs;
+        SleepMicros(active ? 500 : 5000);
+        if (stop_pushing_.load()) break;
+        if (PushWatches()) last_activity_ns_.store(NowNs());
+    }
 }
 
 void Session::OnFence(uint32_t context_id, uint32_t ring_idx, uint64_t fence_id) {
@@ -172,7 +251,8 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
             return SendError(h.sequence, type, kENOENT, "WRITE_RANGE outside a mapped resource");
         std::memcpy(static_cast<uint8_t*>(it->second.mapping.host_ptr) + r.offset, p.data() + sizeof r, static_cast<size_t>(r.size));
         // The guest already has these bytes: keep watched shadows in step so they are not echoed back.
-        for (auto& w : it->second.watches) {
+        for (auto* list : {&it->second.watches, &it->second.controls})
+        for (auto& w : *list) {
             if (w.shadow.size() != w.size) continue;
             const uint64_t lo = std::max(w.offset, r.offset), hi = std::min(w.offset + w.size, r.offset + r.size);
             if (lo < hi) std::memcpy(w.shadow.data() + (lo - w.offset), p.data() + sizeof r + (lo - r.offset), static_cast<size_t>(hi - lo));
@@ -200,7 +280,14 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
         auto it = resources_.find(r.resource_id);
         if (it == resources_.end() || r.offset + r.size > it->second.mapping.size || r.size > (1u << 20))
             return SendError(h.sequence, type, kENOENT, "WATCH_RANGE outside a resource or larger than 1 MiB");
-        it->second.watches.push_back({r.offset, r.size, {}});
+        if (r.flags & PVG_RANGE_CONTROL) {
+            if (r.size == 0 || r.size > 8) return SendError(h.sequence, type, kEINVAL, "control words are 1 to 8 bytes");
+            auto& cs = it->second.controls;   // a cached shmem reused for a new ring marks again
+            if (std::none_of(cs.begin(), cs.end(), [&](const MirroredResource::Watch& c) { return c.offset == r.offset; }))
+                cs.push_back({r.offset, r.size, {}});
+        } else {
+            it->second.watches.push_back({r.offset, r.size, {}});
+        }
         return true;
     }
     case PVG_MSG_EXECBUFFER: {
@@ -232,10 +319,21 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
 }
 
 std::string Session::Run() {
+    stop_pushing_ = false;
+    last_activity_ns_ = NowNs();
+    std::thread pusher([this] { PushLoop(); });
+    std::string reason = Serve();
+    stop_pushing_ = true;
+    pusher.join();
+    return reason;
+}
+
+std::string Session::Serve() {
     std::vector<uint8_t> payload;
     for (;;) {
         pvg_msg_header h{};
         if (!stream_->ReadExact(&h, sizeof h)) return "guest disconnected";
+        last_activity_ns_.store(NowNs());
         if (h.magic != PVG_MAGIC || h.length > PVG_MAX_MESSAGE) return "protocol error: bad header";
         const size_t padded = h.length + (8 - (h.length % 8)) % 8;
         payload.resize(padded);

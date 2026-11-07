@@ -135,6 +135,9 @@ IOReturn PVGUserClient::externalMethod(uint32_t selector, IOExternalMethodArgume
     case PVG_UC_WAIT:
         if (a->structureInputSize != sizeof(pvg_uc_wait)) return kIOReturnBadArgument;
         return _transport->wait(static_cast<const pvg_uc_wait *>(a->structureInput));
+    case PVG_UC_MARK_CONTROL:
+        if (!scalars(3, 0) || a->scalarInput[1] > 0xffffffffull) return kIOReturnBadArgument;
+        return _transport->markControl(static_cast<uint32_t>(a->scalarInput[0]), a->scalarInput[1], a->scalarInput[2], _task);
     case PVG_UC_FLUSH_MIRRORS:
         if (a->scalarInputCount != 0) return kIOReturnBadArgument;
         return _transport->flushMirrors(_task);

@@ -60,7 +60,7 @@ enum pvg_msg_type {
     PVG_MSG_WRITE_RANGE      = 0x0200, /* guest -> host: pvg_range + bytes (guest copy is newer) */
     PVG_MSG_READ_RANGE       = 0x0201, /* guest -> host: pvg_range; reply PVG_MSG_RANGE_DATA */
     PVG_MSG_RANGE_DATA       = 0x0202, /* host -> guest: pvg_range + bytes (host copy is newer) */
-    PVG_MSG_WATCH_RANGE      = 0x0203, /* guest -> host: push this range after every host step */
+    PVG_MSG_WATCH_RANGE      = 0x0203, /* guest -> host: push changes to this range (flags: PVG_RANGE_CONTROL) */
 
     /* presentation and telemetry */
     PVG_MSG_PRESENT          = 0x0300, /* guest -> host: pvg_present (host window, no readback) */
@@ -229,8 +229,14 @@ typedef struct pvg_execbuffer {
 
 typedef struct pvg_fence { uint32_t context_id, ring_idx; uint64_t fence_id; } pvg_fence;
 
+/* pvg_range.flags (WATCH_RANGE only). A control range holds a word that orders other shared
+ * bytes, such as a Venus ring's head, tail or status. Each side reads every control word before
+ * the other bytes it is about to send and sends them after those bytes, so a peer that sees a new
+ * head (or tail) also sees the data written before it. Ordinary watches skip control ranges. */
+#define PVG_RANGE_CONTROL 0x1u
+
 typedef struct pvg_range {
-    uint32_t resource_id, reserved;
+    uint32_t resource_id, flags;
     uint64_t offset;
     uint64_t size;                    /* data bytes follow for WRITE_RANGE / RANGE_DATA */
 } pvg_range;

@@ -52,6 +52,13 @@ static void TestDiff() {
     mem[600] = 7; mem[601] = 8; mem[1400] = 9;
     out.clear(); Session::DiffRange(mem.data(), w, out);
     CHECK(out.size() == 2 && out[0].first == 576 && out[0].second.size() == 64 && out[1].first == 1344, "only dirty 64-byte granules travel");
+
+    // A control word (ring head) is left to the control pass, and splits the span around it.
+    std::vector<MirroredResource::Watch> controls{{640, 4, {}}};
+    mem[600] = 1; mem[641] = 2; mem[710] = 3;
+    out.clear(); Session::DiffRange(mem.data(), w, out, 64, &controls);
+    CHECK(out.size() == 2 && out[0].first == 576 && out[0].second.size() == 64 && out[1].first == 704,
+          "ordinary watches skip control words");
 }
 
 // Plays the guest kext's role over loopback TCP.

@@ -46,6 +46,7 @@ public:
     IOReturn flushMirrors(task_t owner);
     IOReturn readRange(uint32_t resourceId, uint64_t offset, uint64_t size);
     IOReturn watchRange(uint32_t resourceId, uint64_t offset, uint64_t size);
+    IOReturn markControl(uint32_t resourceId, uint64_t offset, uint64_t size, task_t owner);
     IOReturn execbuffer(const pvg_uc_exec *in, const void *commands, uint64_t *fenceId);
     IOReturn syncCreate(uint64_t initial, uint32_t *syncId);
     IOReturn syncDestroy(uint32_t syncId);
@@ -58,8 +59,12 @@ public:
 
 private:
     enum { kMaxResources = 4096, kMaxSyncs = 4096, kMaxContexts = 64, kMaxPendingSignals = 1024, kMaxReplies = 32 };
+    enum { kMaxControls = 4, kMaxControlSize = 8, kMaxControlSnaps = 512 };
     // memory: guest copy mapped into user space. synced: kernel-only copy of the last state both sides agree on.
-    struct Resource { uint32_t id, contextId; uint64_t size; IOBufferMemoryDescriptor *memory; task_t owner; IOBufferMemoryDescriptor *synced; };
+    // controls: words that order the rest (a Venus ring's head, tail, status); see PVG_RANGE_CONTROL.
+    struct Resource { uint32_t id, contextId; uint64_t size; IOBufferMemoryDescriptor *memory; task_t owner; IOBufferMemoryDescriptor *synced;
+                      uint32_t controlCount; uint32_t controlOffset[kMaxControls]; uint8_t controlSize[kMaxControls]; };
+    struct ControlSnap { uint32_t resourceId, offset; uint8_t size; uint8_t bytes[kMaxControlSize]; };
     struct Sync { uint32_t id; bool used; uint64_t value; };
     struct PendingSignal { bool used; uint32_t contextId, ringIdx; uint64_t fenceId; uint32_t count; pvg_uc_sync_point points[PVG_UC_MAX_SYNCS]; };
     struct Reply { bool used, done; uint32_t sequence; uint16_t type; void *buffer; uint32_t capacity, length; int32_t error; };
@@ -76,11 +81,14 @@ private:
     Resource *findResource(uint32_t id);
     Sync *findSync(uint32_t id);
     bool syncsReached(const pvg_uc_wait *in);
-    IOReturn sendDiff(uint32_t resourceId, const uint8_t *current, uint8_t *synced, uint64_t size);
+    IOReturn sendDiff(uint32_t resourceId, const uint8_t *current, uint8_t *synced, uint64_t size,
+                      uint32_t controlCount, const uint32_t *controlOffset);
 
     HyperVVMBusDevice *_device = nullptr;
     IOLock *_lock = nullptr;          // state, replies, syncs
     IOLock *_sendLock = nullptr;      // keeps each message contiguous in the stream
+    IOLock *_flushLock = nullptr;     // one FLUSH_MIRRORS at a time (they share _controlSnaps)
+    ControlSnap *_controlSnaps = nullptr;
     bool _connected = false, _negotiated = false;
     uint32_t _nextSequence = 1, _nextResource = 1, _nextSync = 1, _nextContext = 1;
     uint64_t _nextFence[kMaxContexts] = {};
