@@ -42,10 +42,11 @@ bool PVGTransport::start(IOService *provider) {
     _device->retain();
     _lock = IOLockAlloc(); _sendLock = IOLockAlloc(); _flushLock = IOLockAlloc();
     _controlSnaps = static_cast<ControlSnap *>(IOMallocData(kMaxControlSnaps * sizeof(ControlSnap)));
+    _diffStage = static_cast<uint8_t *>(IOMallocData(kDiffStage));
     _rxCapacity = kRxCapacity;
     _rxBuffer = static_cast<uint8_t *>(IOMallocData(_rxCapacity));
     _txPacket = static_cast<uint8_t *>(IOMallocData(sizeof(VMPipeHeader) + kPacketPayload));
-    if (!_lock || !_sendLock || !_flushLock || !_controlSnaps || !_rxBuffer || !_txPacket) { PVGLOG("allocation failed"); return false; }
+    if (!_lock || !_sendLock || !_flushLock || !_controlSnaps || !_diffStage || !_rxBuffer || !_txPacket) { PVGLOG("allocation failed"); return false; }
 
     if (_device->installPacketActions(this, &PVGTransport::packetReady, nullptr, 32 * 1024) != kIOReturnSuccess ||
         _device->openVMBusChannel(kRingBytes, kRingBytes) != kIOReturnSuccess) {
@@ -94,6 +95,7 @@ void PVGTransport::free() {
     if (_sendLock) IOLockFree(_sendLock);
     if (_flushLock) IOLockFree(_flushLock);
     if (_controlSnaps) IOFreeData(_controlSnaps, kMaxControlSnaps * sizeof(ControlSnap));
+    if (_diffStage) IOFreeData(_diffStage, kDiffStage);
     if (_device) _device->release();
     super::free();
 }
@@ -469,16 +471,24 @@ IOReturn PVGTransport::sendDiff(uint32_t resourceId, const uint8_t *current, uin
     uint64_t pos = 0;
     while (pos < size && status == kIOReturnSuccess) {
         const uint64_t len = (size - pos) < granule ? (size - pos) : granule;
+        // Unlocked scan for the next changed granule (cheap; most of a resource is unchanged).
         if (isControl(pos) || !memcmp(current + pos, synced + pos, static_cast<size_t>(len))) { pos += len; continue; }
-        uint64_t end = pos + len;
-        while (end < size && end - pos < kRangeChunk && !isControl(end)) {
+        // A host push writes the guest and agreed copies together under _lock. Compare and copy under
+        // it too, or a push landing mid-scan makes stale guest bytes look guest-written and they would
+        // overwrite the host's newer ones (host-written replies, feedback).
+        IOLockLock(_lock);
+        uint64_t end = pos;
+        while (end < size && end - pos < kDiffStage && !isControl(end)) {
             const uint64_t l2 = (size - end) < granule ? (size - end) : granule;
             if (!memcmp(current + end, synced + end, static_cast<size_t>(l2))) break;
             end += l2;
         }
-        memcpy(synced + pos, current + pos, static_cast<size_t>(end - pos));
-        pvg_range rg{resourceId, 0, pos, end - pos};
-        status = sendMessage(PVG_MSG_WRITE_RANGE, 0, 0, &rg, sizeof rg, synced + pos, static_cast<uint32_t>(end - pos));
+        const uint64_t n = end - pos;
+        if (n) { memcpy(_diffStage, current + pos, static_cast<size_t>(n)); memcpy(synced + pos, _diffStage, static_cast<size_t>(n)); }
+        IOLockUnlock(_lock);
+        if (!n) { pos += len; continue; }   // the push already made it agree
+        pvg_range rg{resourceId, 0, pos, n};
+        status = sendMessage(PVG_MSG_WRITE_RANGE, 0, 0, &rg, sizeof rg, _diffStage, static_cast<uint32_t>(n));
         pos = end;
     }
     return status;
@@ -496,10 +506,16 @@ IOReturn PVGTransport::flushMirrors(task_t owner) {
         const Resource &r = _resources[i];
         if (!r.id || r.owner != owner || !r.synced || !r.memory) continue;
         const auto *bytes = static_cast<const uint8_t *>(r.memory->getBytesNoCopy());
+        const auto *agreed = static_cast<const uint8_t *>(r.synced->getBytesNoCopy());
         for (uint32_t c = 0; c < r.controlCount && snaps < kMaxControlSnaps; ++c) {
+            const uint32_t off = r.controlOffset[c]; const uint8_t n = r.controlSize[c];
+            // Only words the guest changed travel (a ring tail). Host-written words (head, status) equal
+            // their agreed copy here; a push that lands later must not make the stale value look new.
+            if (!memcmp(bytes + off, agreed + off, n)) continue;
             ControlSnap &s = _controlSnaps[snaps++];
-            s.resourceId = r.id; s.offset = r.controlOffset[c]; s.size = r.controlSize[c];
-            memcpy(s.bytes, bytes + s.offset, s.size);
+            s.resourceId = r.id; s.offset = off; s.size = n;
+            memcpy(s.bytes, bytes + off, n);
+            memcpy(s.agreed, agreed + off, n);
         }
     }
     IOLockUnlock(_lock);
@@ -525,17 +541,19 @@ IOReturn PVGTransport::flushMirrors(task_t owner) {
         const ControlSnap &s = _controlSnaps[k];
         IOLockLock(_lock);
         Resource *r = findResource(s.resourceId);
-        IOBufferMemoryDescriptor *synced = (r && r->synced) ? r->synced : nullptr;
-        if (synced) synced->retain();
+        bool send = false;
+        if (r && r->synced) {
+            auto *agreed = static_cast<uint8_t *>(r->synced->getBytesNoCopy()) + s.offset;
+            // The guest changed this word. If the host pushed it meanwhile (a word both sides write),
+            // the host's newer value already reached the guest copy: send the guest's only if the
+            // agreed copy is still the one the guest changed from.
+            if (!memcmp(agreed, s.agreed, s.size)) { memcpy(agreed, s.bytes, s.size); send = true; }
+        }
         IOLockUnlock(_lock);
-        if (!synced) continue;
-        auto *agreed = static_cast<uint8_t *>(synced->getBytesNoCopy()) + s.offset;
-        if (memcmp(agreed, s.bytes, s.size)) {
-            memcpy(agreed, s.bytes, s.size);
+        if (send) {
             pvg_range rg{s.resourceId, 0, s.offset, s.size};
             status = sendMessage(PVG_MSG_WRITE_RANGE, 0, 0, &rg, sizeof rg, s.bytes, s.size);
         }
-        synced->release();
     }
     IOLockUnlock(_flushLock);
     return status;

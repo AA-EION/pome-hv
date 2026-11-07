@@ -186,6 +186,47 @@ size_t Session::PushWatches(bool full) {
     return sent;
 }
 
+void Session::DumpControls() {
+    // Each Venus ring's head, tail and status as the host holds them (and as last pushed), printed when
+    // they change. A stalled ring shows here as a tail ahead of a head that does not move.
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::string ops;
+    for (const auto& [key, count] : exec_ops_) {
+        char item[64];
+        std::snprintf(item, sizeof item, " ctx%u/op%u x%llu", static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key),
+                      static_cast<unsigned long long>(count));
+        ops += item;
+    }
+    if (!ops.empty() && ops != ops_dump_) { std::fprintf(stderr, "pvg: batches by first command:%s\n", ops.c_str()); ops_dump_ = ops; }
+    for (auto& [id, res] : resources_) {
+        if (res.controls.empty() || !res.mapping.host_ptr) continue;
+        char line[256];
+        int n = std::snprintf(line, sizeof line, "ctx %u res %u:", res.context_id, id);
+        for (const auto& c : res.controls) {
+            uint32_t now = 0, sent = 0;
+            std::memcpy(&now, static_cast<const uint8_t*>(res.mapping.host_ptr) + c.offset, std::min<size_t>(4, static_cast<size_t>(c.size)));
+            if (c.shadow.size() >= 4) std::memcpy(&sent, c.shadow.data(), 4);
+            n += std::snprintf(line + n, sizeof line - n, " @%llu=%u (pushed %u)", static_cast<unsigned long long>(c.offset), now, sent);
+            if (n >= static_cast<int>(sizeof line)) break;
+        }
+        // Venus places the command buffer after the three 64-byte control lines: show the words at the
+        // head, i.e. the command the ring thread is on (or will run next).
+        if (res.controls.size() == 3 && n < static_cast<int>(sizeof line)) {
+            uint32_t head = 0;
+            std::memcpy(&head, static_cast<const uint8_t*>(res.mapping.host_ptr) + res.controls[0].offset, 4);
+            const uint64_t at = 192 + (head & 0xffffu);
+            if (at + 16 <= res.mapping.size) {
+                uint32_t w[4];
+                std::memcpy(w, static_cast<const uint8_t*>(res.mapping.host_ptr) + at, sizeof w);
+                n += std::snprintf(line + n, sizeof line - n, " | at head: %u %u %u %u", w[0], w[1], w[2], w[3]);
+            }
+        }
+        std::string text(line);
+        auto& before = control_dump_[id];
+        if (before != text) { std::fprintf(stderr, "pvg: ring %s\n", line); before = std::move(text); }
+    }
+}
+
 void Session::PushLoop() {
     // Fast while the guest is active (it may be spinning on a ring head), slow when idle.
     constexpr int64_t kActiveWindowNs = 250'000'000, kStatsPeriodNs = 10'000'000'000;
@@ -203,6 +244,7 @@ void Session::PushLoop() {
                              static_cast<unsigned long long>(s.bytes_out >> 10));
                 last = s;
             }
+            DumpControls();
         }
         const bool active = NowNs() - last_activity_ns_.load() < kActiveWindowNs;
         SleepMicros(active ? 500 : 5000);
@@ -360,6 +402,12 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
         pvg_execbuffer e{};
         if (!Take(p, &e) || p.size() < sizeof e + e.command_size) return SendError(h.sequence, type, kEINVAL, "short EXECBUFFER");
         std::vector<uint8_t> commands(p.begin() + sizeof e, p.begin() + sizeof e + e.command_size);
+        if (verbose_) {   // first Venus command type of each batch, per context (see DumpControls)
+            uint32_t op = 0;
+            if (e.command_size >= 4) std::memcpy(&op, commands.data(), 4);
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            ++exec_ops_[(static_cast<uint64_t>(e.context_id) << 32) | op];
+        }
         int r = renderer_->Submit(e.context_id, commands.data(), e.command_size);
         if (r == 0 && e.fence_id) {
             r = renderer_->CreateFence(e.context_id, e.ring_idx, e.fence_id);

@@ -79,6 +79,10 @@ private:
     std::atomic<int64_t> last_activity_ns_{0};
     std::map<uint32_t, MirroredResource> resources_;
     std::map<uint32_t, bool> contexts_;
+    std::map<uint32_t, std::string> control_dump_;   // -v: last ring words printed per resource
+    std::map<uint64_t, uint64_t> exec_ops_;           // -v: (context << 32 | first command type) -> batches
+    std::string ops_dump_;
+    void DumpControls();
     SessionStats stats_;
 };
 
