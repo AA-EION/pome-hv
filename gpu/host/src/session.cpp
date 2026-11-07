@@ -214,6 +214,9 @@ void Session::PushLoop() {
 }
 
 void Session::OnFence(uint32_t context_id, uint32_t ring_idx, uint64_t fence_id) {
+    if (verbose_ && ring_idx)
+        std::fprintf(stderr, "pvg: fence ctx %u ring %u id %llu retired
+", context_id, ring_idx, static_cast<unsigned long long>(fence_id));
     PushWatches(); // feedback written by the GPU must reach the guest before it sees the fence
     pvg_fence f{context_id, ring_idx, fence_id};
     Send(PVG_MSG_FENCE_SIGNALED, 0, &f, sizeof f);
@@ -359,7 +362,15 @@ bool Session::Handle(const pvg_msg_header& h, std::vector<uint8_t>& p) {
         if (!Take(p, &e) || p.size() < sizeof e + e.command_size) return SendError(h.sequence, type, kEINVAL, "short EXECBUFFER");
         std::vector<uint8_t> commands(p.begin() + sizeof e, p.begin() + sizeof e + e.command_size);
         int r = renderer_->Submit(e.context_id, commands.data(), e.command_size);
-        if (r == 0 && e.fence_id) r = renderer_->CreateFence(e.context_id, e.ring_idx, e.fence_id);
+        if (r == 0 && e.fence_id) {
+            r = renderer_->CreateFence(e.context_id, e.ring_idx, e.fence_id);
+            // Ring 0 retires at once; queue rings retire when the GPU finishes, so log those to
+            // match each against its retirement when a guest wait hangs.
+            if (verbose_ && e.ring_idx)
+                std::fprintf(stderr, "pvg: fence ctx %u ring %u id %llu submitted%s
+", e.context_id, e.ring_idx,
+                             static_cast<unsigned long long>(e.fence_id), r ? " (refused)" : "");
+        }
         ++stats_.execbuffers;
         renderer_->Poll();
         PushWatches();

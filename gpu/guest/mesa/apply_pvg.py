@@ -133,6 +133,57 @@ def main():
         "         vn_ring_pvg_nudge(ring, &relax_state);\n"
         "#endif\n"
         "         if (vn_ring_has_space(ring, size, &head)) {\n")
+    # vkWaitRingSeqnoMESA blocks the host's command stream until the ring reaches a seqno. If the ring
+    # thread is idle (and Venus missed the IDLE bit, see above) nothing wakes it, and the waiters'
+    # notifies queue up behind the blocked stream: Geekbench hung in newHeapWithDescriptor this way.
+    # Every such wait is preceded by a notify in the same batch (16 words: both commands are 24 bytes).
+    notify_queue = ("#ifdef __APPLE__\n"
+                    "      if (vn_renderer_pvg_active(dev->renderer)) /* pome: wake the ring first */\n"
+                    "         vn_encode_vkNotifyRingMESA(&local_enc, 0, ring_id, queue->ring_seqno, 0);\n"
+                    "#endif\n")
+    replace_once(venus / "vn_queue.c",
+        "   uint32_t local_data[8];\n"
+        "   struct vn_cs_encoder local_enc =\n"
+        "      VN_CS_ENCODER_INITIALIZER_LOCAL(local_data, sizeof(local_data));\n"
+        "   if (queue->ring_seqno_valid) {\n"
+        "      const uint64_t ring_id = vn_ring_get_id(dev->primary_ring);\n"
+        "      vn_encode_vkWaitRingSeqnoMESA(&local_enc, 0, ring_id,\n",
+        "   uint32_t local_data[16];\n"
+        "   struct vn_cs_encoder local_enc =\n"
+        "      VN_CS_ENCODER_INITIALIZER_LOCAL(local_data, sizeof(local_data));\n"
+        "   if (queue->ring_seqno_valid) {\n"
+        "      const uint64_t ring_id = vn_ring_get_id(dev->primary_ring);\n"
+        + notify_queue +
+        "      vn_encode_vkWaitRingSeqnoMESA(&local_enc, 0, ring_id,\n")
+    notify_mem = ("#ifdef __APPLE__\n"
+                  "      if (vn_renderer_pvg_active(dev->renderer)) /* pome: wake the ring first */\n"
+                  "         vn_encode_vkNotifyRingMESA(&local_enc, 0, vn_ring_get_id(dev->primary_ring),\n"
+                  "                                    (uint32_t)mem->bo_ring_seqno, 0);\n"
+                  "#endif\n")
+    memory = venus / "vn_device_memory.c"
+    replace_once(memory,
+        "   uint32_t local_data[8];\n"
+        "   if (vn_device_memory_needs_wait_alloc(dev, mem)) {\n"
+        "      struct vn_cs_encoder local_enc =\n"
+        "         VN_CS_ENCODER_INITIALIZER_LOCAL(local_data, sizeof(local_data));\n"
+        "      vn_encode_vkWaitRingSeqnoMESA(&local_enc, 0,\n",
+        "   uint32_t local_data[16];\n"
+        "   if (vn_device_memory_needs_wait_alloc(dev, mem)) {\n"
+        "      struct vn_cs_encoder local_enc =\n"
+        "         VN_CS_ENCODER_INITIALIZER_LOCAL(local_data, sizeof(local_data));\n"
+        + notify_mem +
+        "      vn_encode_vkWaitRingSeqnoMESA(&local_enc, 0,\n")
+    replace_once(memory,
+        "      uint32_t local_data[8];\n"
+        "      struct vn_cs_encoder local_enc =\n"
+        "         VN_CS_ENCODER_INITIALIZER_LOCAL(local_data, sizeof(local_data));\n"
+        "      vn_encode_vkWaitRingSeqnoMESA(&local_enc, 0,\n",
+        "      uint32_t local_data[16];\n"
+        "      struct vn_cs_encoder local_enc =\n"
+        "         VN_CS_ENCODER_INITIALIZER_LOCAL(local_data, sizeof(local_data));\n"
+        + notify_mem +
+        "      vn_encode_vkWaitRingSeqnoMESA(&local_enc, 0,\n")
+
     replace_once(venus / "vn_common.c",
         "   state->warn = false;\n",
         "   state->warn = false;\n"
