@@ -1073,6 +1073,32 @@ static int pvgmtl_vk_initialize(void)
             }
         }
         if (want) CFRelease(want);
+        /* pome: Venus derives deviceUUID from the vendor and device IDs (vn_physical_device_init_uuids),
+         * so the host's UUID never matches. The IDs pass through: match pvg-host's preferred adapter on them. */
+        io_service_t t2 = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("PVGTransport"));
+        CFNumberRef pref = t2 ? (CFNumberRef)IORegistryEntryCreateCFProperty(t2, CFSTR("PVGPreferredAdapter"), kCFAllocatorDefault, 0) : NULL;
+        CFArrayRef adapters = t2 ? (CFArrayRef)IORegistryEntryCreateCFProperty(t2, CFSTR("PVGAdapters"), kCFAllocatorDefault, 0) : NULL;
+        if (t2) IOObjectRelease(t2);
+        int32_t index = -1;
+        if (pref && CFGetTypeID(pref) == CFNumberGetTypeID()) CFNumberGetValue(pref, kCFNumberSInt32Type, &index);
+        if (adapters && CFGetTypeID(adapters) == CFArrayGetTypeID() && index >= 0 && index < CFArrayGetCount(adapters)) {
+            CFDictionaryRef a = (CFDictionaryRef)CFArrayGetValueAtIndex(adapters, index);
+            CFNumberRef vn = a ? (CFNumberRef)CFDictionaryGetValue(a, CFSTR("VendorID")) : NULL;
+            CFNumberRef dn = a ? (CFNumberRef)CFDictionaryGetValue(a, CFSTR("DeviceID")) : NULL;
+            uint32_t vendor = 0, device = 0;
+            if (vn && dn && CFNumberGetValue(vn, kCFNumberSInt32Type, &vendor) && CFNumberGetValue(dn, kCFNumberSInt32Type, &device)) {
+                for (uint32_t i = 0; i < n; i++) {
+                    VkPhysicalDeviceProperties p; pvkGetPhysicalDeviceProperties(pds[i], &p);
+                    if (p.vendorID == vendor && p.deviceID == device) {
+                        g_pdev = pds[i];
+                        nvlog("vk: host GPU %u (%04x:%04x) is pvg-host's preferred adapter %d", i, vendor, device, index);
+                        break;
+                    }
+                }
+            }
+        }
+        if (pref) CFRelease(pref);
+        if (adapters) CFRelease(adapters);
     }
     VkPhysicalDeviceProperties pp; pvkGetPhysicalDeviceProperties(g_pdev, &pp);
     if (pp.vendorID == 0x10de) {
